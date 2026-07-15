@@ -1,0 +1,16 @@
+# 도메인 폴더(예: src/**/member/**)가 생기면 domain/* 라벨을 여기에 추가
+
+docker:
+  - changed-files:
+    - any-glob-to-any-file: 'Dockerfile'
+    - any-glob-to-any-file: 'docker-compose*.yml'
+
+ci:
+  - changed-files:
+    - any-glob-to-any-file: '.github/workflows/**'
+    - any-glob-to-any-file: '.github/labeler.yml'
+
+deps:
+  - changed-files:
+    - any-glob-to-any-file: 'pyproject.toml'
+    - any-glob-to-any-file: 'uv.lock'

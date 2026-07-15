@@ -1,0 +1,20 @@
+name: 기능/작업
+description: 새 기능이나 작업 항목을 등록합니다
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 설명
+      description: 무엇을 만들거나 고칠 것인지 설명해주세요
+    validations:
+      required: true
+  - type: textarea
+    id: tasks
+    attributes:
+      label: 작업 체크리스트
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: false
