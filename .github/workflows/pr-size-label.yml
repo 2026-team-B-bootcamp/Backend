@@ -1,0 +1,67 @@
+name: PR Size Labeler
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  size-label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Calculate PR size and apply label
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const pull_number = context.payload.pull_request.number;
+
+            const { data: pr } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number,
+            });
+
+            const totalChanges = pr.additions + pr.deletions;
+
+            let sizeLabel;
+            if (totalChanges < 10) {
+              sizeLabel = 'size/XS';
+            } else if (totalChanges < 50) {
+              sizeLabel = 'size/S';
+            } else if (totalChanges < 200) {
+              sizeLabel = 'size/M';
+            } else if (totalChanges < 500) {
+              sizeLabel = 'size/L';
+            } else {
+              sizeLabel = 'size/XL';
+            }
+
+            const sizeLabels = ['size/XS', 'size/S', 'size/M', 'size/L', 'size/XL'];
+            const currentLabels = pr.labels.map(l => l.name);
+            const existingSizeLabels = currentLabels.filter(l => sizeLabels.includes(l));
+
+            for (const label of existingSizeLabels) {
+              if (label !== sizeLabel) {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: pull_number,
+                  name: label,
+                });
+              }
+            }
+
+            if (!existingSizeLabels.includes(sizeLabel)) {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: pull_number,
+                labels: [sizeLabel],
+              });
+            }
+
+            console.log(`PR #${pull_number}: ${totalChanges} lines changed -> ${sizeLabel}`);
