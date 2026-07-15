@@ -1,0 +1,47 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/app
+    environment:
+      # DB 접속 문자열. "db"는 compose 서비스 이름을 호스트명으로 사용한 것이다.
+      # 아직 코드에서 실제로 쓰지는 않고, 나중에 DB 연동을 붙일 때를 위해
+      # 미리 정해둔 값이다.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # Windows(WSL2)에서 윈도우 파일시스템을 bind-mount 하면 파일 변경 감지
+      # (inotify)가 불안정한 경우가 많다. 폴링 방식으로 강제 전환해
+      # uvicorn --reload 핫 리로드가 항상 동작하도록 한다.
+      WATCHFILES_FORCE_POLLING: "true"
+    depends_on:
+      - db
+
+volumes:
+  pgdata:
