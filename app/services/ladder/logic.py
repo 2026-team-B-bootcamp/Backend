@@ -8,7 +8,9 @@ import random
 DEFAULT_ROWS = 10
 
 
-def generate_rungs(columns: int, rows: int = DEFAULT_ROWS, rng: random.Random | None = None) -> list[list[bool]]:
+def generate_rungs(
+    columns: int, rows: int = DEFAULT_ROWS, rng: random.Random | None = None
+) -> list[list[bool]]:
     """columns개의 세로줄 사이에 rows개의 가로줄(사다리 칸)을 무작위로 놓는다.
 
     같은 줄에서 인접한 두 칸이 동시에 이어지면 경로가 애매해지므로, 하나를 놓으면

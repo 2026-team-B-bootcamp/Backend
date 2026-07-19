@@ -33,6 +33,7 @@ def _serialize(game: WordChainGame, store: WordChainStore) -> WordChainStateResp
     current = game.current_player()
     return WordChainStateResponse(
         status=game.status,
+        round=game.round,
         players=[
             WordChainPlayerState(
                 user_id=p.user_id, display_name=p.display_name, alive=p.alive

@@ -18,3 +18,4 @@ class BingoStateResponse(BaseModel):
     my_board: list[int] | None
     players: list[PlayerState]
     winner_user_id: int | None = None
+    round: int = 1
