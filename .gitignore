@@ -17,3 +17,7 @@ __pycache__/
 
 # oh-my-claudecode 도구 내부 상태
 .omc/
+
+# 업로드된 사용자 아바타 이미지
+static/avatars/*
+!static/avatars/.gitkeep
