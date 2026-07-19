@@ -1,3 +1,5 @@
+"""빙고 API 요청/응답 스키마 (routers/bingo.py에서 사용)."""
+
 from pydantic import BaseModel
 
 

@@ -1,3 +1,10 @@
+"""빙고 미니게임 API 라우터.
+
+요청 흐름: 클라이언트 → 이 라우터 → game_registry(채널당 게임 종류 잠금)
+→ bingo store(게임 상태 저장/전이) + bingo logic(줄 완성 판정) → 결과를
+직렬화해 응답하고 realtime hub로 채널에 변경을 알린다.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +54,7 @@ async def join_bingo(
     registry: GameRegistry = Depends(get_game_registry),
 ) -> BingoStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
+    # 채널을 빙고 게임으로 점유(다른 게임과 동시 진행 방지)한 뒤 참가 처리.
     await registry.acquire(channel_id, "bingo")
     game = await store.join(channel_id, current_user.id, current_user.display_name)
     await _notify(channel_id)
@@ -63,6 +71,7 @@ async def click_bingo(
     registry: GameRegistry = Depends(get_game_registry),
 ) -> BingoStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
+    # 번호 하나를 호출 처리하고, store 내부에서 승리(3줄 완성) 여부까지 판정한다.
     game = await store.click(channel_id, current_user.id, payload.number)
     if game.winner_user_id is not None:
         # 라운드가 끝나면 채널을 다른 게임에게 내준다 — 재참여하면 새 라운드로 다시 잠긴다.

@@ -1,3 +1,10 @@
+"""사다리타기 게임 API 라우터.
+
+요청 흐름: 클라이언트 → 이 라우터 → LadderStore(참가자/결과/사다리 상태 관리) →
+LadderStateResponse로 변환해 응답 + 웹소켓으로 전원에게 브로드캐스트.
+사다리 모양 생성과 경로 계산 자체는 services/ladder/logic.py에 있다.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -116,6 +123,7 @@ async def run_ladder(
     store: LadderStore = Depends(get_ladder_store),
 ) -> LadderStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
+    # 사다리 모양을 무작위로 만들고 참가자→결과 경로를 계산해 확정하는 게 여기서 일어난다.
     game = await store.run(channel_id, current_user.display_name)
     state = _serialize(game)
     await _broadcast_state(channel_id, state)

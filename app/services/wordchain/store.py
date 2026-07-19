@@ -1,3 +1,10 @@
+"""끝말잇기 게임 세션의 상태를 메모리에 저장하고 전이시키는 저장소.
+
+routers/wordchain.py의 각 엔드포인트가 호출하는 진입점이며, 단어 자체의 유효성
+검사는 logic.py에 위임한다. 상태는 대기(waiting) → 진행(playing) → 종료(finished)
+순서로 전이한다.
+"""
+
 import asyncio
 import time
 from collections.abc import Callable
@@ -68,19 +75,26 @@ class WordChainStore:
         self._clock = clock
 
     def _sweep(self) -> None:
+        # 오래 방치돼 TTL이 지난 게임은 메모리에서 정리한다.
         now = self._clock()
         expired = [cid for cid, g in self._games.items() if now - g.last_touched > self._ttl]
         for cid in expired:
             del self._games[cid]
 
     def _advance_turn(self, game: WordChainGame) -> None:
+        # 다음 자리부터 한 바퀴 돌며 탈락하지 않은 플레이어를 찾아 차례를 넘긴다.
         for _ in range(len(game.players)):
             game.turn_pos = (game.turn_pos + 1) % len(game.players)
             if game.players[game.turn_pos].alive:
                 return
 
     def _apply_timeouts(self, game: WordChainGame, now: float) -> bool:
-        """지난 턴 마감들을 지연 판정한다. 상태가 바뀌었으면 True."""
+        """지난 턴 마감들을 지연 판정한다. 상태가 바뀌었으면 True.
+
+        타이머를 따로 두지 않고, 요청이 들어올 때마다(join/start/submit/get) 이 함수를
+        호출해 마감이 지난 턴이 있으면 그때그때 탈락 처리한다. 생존자가 1명 이하로
+        줄면 게임을 종료 처리한다.
+        """
         changed = False
         while (
             game.status == PLAYING
@@ -182,6 +196,7 @@ class WordChainStore:
                     status_code=status.HTTP_409_CONFLICT, detail="지금은 당신 차례가 아니에요"
                 )
 
+            # 단어 검증 3단계: 형식(한글 2~10자) → 중복 여부 → 앞 단어 끝글자 잇기.
             word = word.strip()
             if not is_hangul_word(word):
                 raise HTTPException(
@@ -194,6 +209,7 @@ class WordChainStore:
                     detail="이미 나온 단어예요",
                 )
             if game.words:
+                # 두음법칙 변형(예: 례→예)까지 포함해 허용 글자를 구해 비교한다.
                 allowed = allowed_first_chars(game.words[-1].word)
                 if word[0] not in allowed:
                     pretty = "/".join(sorted(allowed))
@@ -202,6 +218,7 @@ class WordChainStore:
                         detail=f"'{pretty}'(으)로 시작하는 단어여야 해요",
                     )
 
+            # 검증을 통과하면 단어를 기록하고 다음 사람 차례로 넘긴다.
             game.words.append(
                 WordEntry(user_id=user_id, display_name=current.display_name, word=word)
             )

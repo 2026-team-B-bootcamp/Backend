@@ -1,3 +1,9 @@
+"""채널 메시지 저장/조회 비즈니스 로직.
+
+routers/messages.py에서 호출된다. create_message로 저장된 메시지는
+라우터 쪽에서 realtime.hub를 통해 실시간 브로드캐스트된다.
+"""
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +25,8 @@ async def create_message(
 async def list_messages(
     db: AsyncSession, channel_id: int, after_id: int | None = None, limit: int = 50
 ) -> list[tuple[Message, str]]:
+    # after_id가 주어지면 그 이후 메시지를(새로고침/폴링용),
+    # 없으면 가장 최근 메시지 limit개를 오래된 순으로 정렬해 반환한다(첫 진입용).
     stmt = (
         select(Message, User.display_name)
         .join(User, User.id == Message.user_id)

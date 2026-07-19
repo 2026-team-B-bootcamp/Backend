@@ -1,3 +1,9 @@
+"""돌림판(룰렛) 게임 세션의 항목/추첨 결과를 메모리에 저장하는 저장소.
+
+routers/wheel.py의 각 엔드포인트가 호출하는 진입점이다. 별도의 logic 모듈 없이
+추첨 로직(무작위 선택)은 spin()에서 바로 처리한다.
+"""
+
 import asyncio
 import random
 import time
@@ -119,6 +125,7 @@ class WheelStore:
                     status_code=status.HTTP_409_CONFLICT,
                     detail="이번 라운드는 이미 돌렸어요. 새 라운드를 시작하세요",
                 )
+            # 등록된 항목 중 하나를 무작위로 뽑아 이번 라운드 결과로 고정한다.
             winner = self._rng.choice(game.options)
             game.result_option_id = winner.id
             game.spun_by = spun_by

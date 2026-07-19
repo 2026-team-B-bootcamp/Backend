@@ -1,3 +1,10 @@
+"""서버별 관심사 태그(최대 3개) 등록/수정을 담당하는 라우터.
+
+요청 흐름: 클라이언트 -> 이 라우터 -> tag_service -> 모델(DB).
+여기서 저장된 태그는 servers.py의 멤버 목록, messages.py의 메시지에서
+"나와 겹치는 관심사"를 계산하는 데 쓰인다 (이 서비스의 차별점 기능).
+"""
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 

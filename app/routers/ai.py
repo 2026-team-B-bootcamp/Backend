@@ -1,3 +1,10 @@
+"""AI 아이스브레이커(대화 시작 질문) API 라우터.
+
+요청 흐름: 클라이언트 → 이 라우터 → tag_service(대상의 관심사 태그 조회)
+→ IcebreakerProvider(서비스, 태그로 질문 생성). 지금은 stub_provider가 붙어
+있지만 나중에 실제 LLM 기반 provider로 교체해도 이 라우터는 그대로 쓸 수 있다.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +28,7 @@ async def icebreaker(
     db: AsyncSession = Depends(get_db),
     provider: IcebreakerProvider = Depends(get_icebreaker_provider),
 ) -> IcebreakerResponse:
+    # 요청자가 서버 멤버인지, 질문 대상(target)도 같은 서버 멤버인지 먼저 확인한다.
     await server_service.require_membership(db, server_id, current_user.id)
     if not await server_service.is_member(db, server_id, user_id):
         raise HTTPException(
@@ -31,6 +39,7 @@ async def icebreaker(
     if target is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
+    # 대상 유저의 관심사 태그를 DB에서 가져온 뒤, provider에게 넘겨 질문을 생성시킨다.
     tag = await tag_service.get_user_tags(db, server_id, user_id)
     question = provider.generate_icebreaker(target.display_name, tag_service.tag_values(tag))
     return IcebreakerResponse(question=question)

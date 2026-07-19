@@ -2,6 +2,11 @@
 
 Single-process only — run uvicorn with one worker. Swap for Redis pub/sub
 if the service ever needs horizontal scaling.
+
+(한국어 설명) 채널별로 접속 중인 WebSocket 연결 목록을 메모리에 들고 있다가,
+새 메시지/타이핑/입장·퇴장 이벤트를 그 채널에 접속한 모든 소켓에 전달(broadcast)하는
+역할이다. routers/ws.py가 연결을 subscribe/unsubscribe 하고,
+routers/messages.py가 메시지 저장 후 broadcast를 호출해 실시간 전파를 시작한다.
 """
 
 import asyncio
@@ -44,6 +49,8 @@ class ChannelHub:
         return [{"user_id": uid, "display_name": name} for uid, name in seen.items()]
 
     async def broadcast(self, channel_id: int, event: dict) -> None:
+        # 해당 채널을 구독 중인 모든 소켓에 이벤트를 전송한다.
+        # 전송 중 실패한 소켓(연결이 끊긴 소켓)은 dead로 모아뒀다가 구독 해제한다.
         async with self._lock:
             sockets = list(self._subs.get(channel_id, {}).keys())
         dead: list[WebSocket] = []

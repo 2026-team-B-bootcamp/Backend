@@ -1,3 +1,10 @@
+"""끝말잇기 게임 API 라우터.
+
+요청 흐름: 클라이언트 → 이 라우터 → WordChainStore(상태 저장/전이) →
+WordChainStateResponse로 변환해 응답 + 웹소켓으로 전원에게 브로드캐스트.
+단어 유효성 검사(끝말잇기 규칙) 자체는 services/wordchain/logic.py에 있다.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,6 +66,7 @@ async def join_wordchain(
     registry: GameRegistry = Depends(get_game_registry),
 ) -> WordChainStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
+    # 이 채널에서 끝말잇기를 쓰겠다고 게임 레지스트리에 선점 등록 후, 대기실에 플레이어로 합류.
     await registry.acquire(channel_id, "wordchain")
     game = await store.join(channel_id, current_user.id, current_user.display_name)
     state = _serialize(game, store)
@@ -90,6 +98,7 @@ async def submit_word(
     registry: GameRegistry = Depends(get_game_registry),
 ) -> WordChainStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
+    # 단어 검증(끝글자 잇기, 중복 여부 등)과 다음 차례 전환은 store.submit 안에서 처리된다.
     game = await store.submit(channel_id, current_user.id, payload.word)
     if game.status == FINISHED:
         # 게임이 끝나면 채널을 다른 게임에게 내준다.

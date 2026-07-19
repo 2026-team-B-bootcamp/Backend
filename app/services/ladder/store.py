@@ -1,3 +1,9 @@
+"""사다리타기 게임 세션의 참가자/결과/실행 상태를 메모리에 저장하는 저장소.
+
+routers/ladder.py의 각 엔드포인트가 호출하는 진입점이며, 사다리 생성과 경로 계산
+자체는 logic.py에 위임한다. 상태는 대기(waiting) → 결과공개(revealed)로 전이한다.
+"""
+
 import asyncio
 import random
 import time
@@ -153,6 +159,7 @@ class LadderStore:
                     status_code=status.HTTP_409_CONFLICT,
                     detail="참가자와 결과가 2개 이상, 같은 개수로 있어야 해요",
                 )
+            # 사다리 모양을 무작위로 만들고(rungs), 각 참가자가 도착하는 결과 인덱스를 계산한다.
             rungs = generate_rungs(columns, rng=self._rng)
             game.rungs = rungs
             game.assignment = compute_assignment(rungs, columns)

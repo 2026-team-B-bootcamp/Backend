@@ -1,3 +1,10 @@
+"""서버(모임) 생성/참여, 채널 관리, 멤버 목록 조회를 담당하는 라우터.
+
+요청 흐름: 클라이언트 -> 이 라우터 -> server_service/tag_service -> 모델(DB).
+초대 코드로 서버에 참여하는 로직과, 멤버 목록을 보여줄 때 나와 겹치는
+관심사 태그를 계산해서 함께 내려주는 로직이 이 서비스의 핵심 특징이다.
+"""
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,6 +82,7 @@ async def list_members(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[MemberResponse]:
+    # 서버 멤버가 아니면 목록을 볼 수 없다 (권한 검사).
     await server_service.require_membership(db, server_id, current_user.id)
 
     members = await db.scalars(
@@ -83,6 +91,9 @@ async def list_members(
         .where(ServerMember.server_id == server_id)
         .order_by(User.id)
     )
+    # 서버 내 모든 멤버의 태그를 한 번에 불러온 뒤, 각 멤버마다 내 태그와
+    # 겹치는 항목(common_with_me)을 계산한다. 이 값으로 프런트에서
+    # "나와 관심사가 겹치는 사람"을 강조해서 보여준다 (서비스 핵심 기능).
     tags_map = await tag_service.get_server_tags_map(db, server_id)
     my_tags = tags_map.get(current_user.id, [])
 

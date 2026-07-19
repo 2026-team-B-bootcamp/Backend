@@ -1,3 +1,10 @@
+"""서버별 관심사 태그(사용자당 3개) CRUD와 "공통 태그" 매칭 로직.
+
+routers/tags.py, servers.py, messages.py에서 호출된다. common_tags가
+이 서비스의 핵심 차별점 기능으로, 이름 옆에 표시할 "나와 겹치는 관심사"를
+계산한다.
+"""
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,6 +18,7 @@ def tag_values(tag: Tag | None) -> list[str]:
 
 
 def common_tags(mine: list[str], theirs: list[str]) -> list[str]:
+    """내 태그(mine) 중 상대 태그(theirs)에도 있는 것만, 내 순서대로 중복 없이 뽑는다."""
     their_set = set(theirs)
     seen: set[str] = set()
     result: list[str] = []

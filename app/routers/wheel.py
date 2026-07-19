@@ -1,3 +1,10 @@
+"""돌림판(룰렛) 게임 API 라우터.
+
+요청 흐름: 클라이언트 → 이 라우터 → WheelStore(항목/추첨 결과 관리) →
+WheelStateResponse로 변환해 응답 + 웹소켓으로 전원에게 브로드캐스트.
+추첨(무작위 선택) 로직 자체는 WheelStore.spin()에 있다.
+"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -81,6 +88,7 @@ async def spin_wheel(
     store: WheelStore = Depends(get_wheel_store),
 ) -> WheelStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
+    # 등록된 항목 중 하나를 무작위로 뽑아 이번 라운드 결과로 고정하는 게 여기서 일어난다.
     game = await store.spin(channel_id, current_user.display_name)
     state = _serialize(game)
     await _broadcast_state(channel_id, state)

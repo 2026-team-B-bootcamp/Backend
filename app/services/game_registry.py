@@ -15,6 +15,7 @@ GAME_LABELS: dict[str, str] = {
     "wordchain": "끝말잇기",
     "wheel": "돌림판",
     "ladder": "사다리타기",
+    "omok": "오목",
 }
 
 
@@ -24,6 +25,8 @@ class GameRegistry:
         self._lock = asyncio.Lock()
 
     async def acquire(self, channel_id: int, kind: str) -> None:
+        # 이 채널에 다른 종류의 게임이 이미 열려 있으면 409로 막고,
+        # 비어 있거나 같은 종류면 이 게임 종류로 채널을 점유한다.
         async with self._lock:
             current = self._active.get(channel_id)
             if current is not None and current != kind:
@@ -35,6 +38,8 @@ class GameRegistry:
             self._active[channel_id] = kind
 
     async def release(self, channel_id: int, kind: str) -> None:
+        # 이 게임 종류가 실제로 채널을 점유하고 있을 때만 잠금을 해제한다.
+        # (이미 다른 게임이 덮어썼다면 손대지 않는다.)
         async with self._lock:
             if self._active.get(channel_id) == kind:
                 del self._active[channel_id]

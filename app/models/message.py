@@ -1,3 +1,9 @@
+"""채널 메시지 테이블 모델.
+
+message_service.py가 이 모델로 메시지를 저장/조회하고, 저장된 메시지는
+routers/messages.py를 거쳐 realtime.hub로 실시간 브로드캐스트된다.
+"""
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Text, func

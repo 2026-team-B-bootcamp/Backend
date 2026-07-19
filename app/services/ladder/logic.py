@@ -1,3 +1,8 @@
+"""사다리타기 경로 생성/계산 로직: 사다리 모양 만들기 + 참가자별 도착 지점 추적.
+
+services/ladder/store.py의 run()이 게임 결과를 확정할 때 이 모듈을 호출한다.
+"""
+
 import random
 
 DEFAULT_ROWS = 10

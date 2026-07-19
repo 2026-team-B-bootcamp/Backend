@@ -1,3 +1,9 @@
+"""채널(서버 안의 대화방) 테이블 모델.
+
+서버 하나가 여러 채널을 가질 수 있고(server_id), 실시간 채팅(ws.py,
+realtime.py)과 메시지(message.py)는 모두 이 채널 단위로 묶인다.
+"""
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, func
