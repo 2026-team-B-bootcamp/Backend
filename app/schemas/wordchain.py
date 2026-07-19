@@ -25,6 +25,7 @@ class WordEntryOut(BaseModel):
 
 class WordChainStateResponse(BaseModel):
     status: str
+    round: int = 1
     players: list[WordChainPlayerState]
     turn_user_id: int | None
     words: list[WordEntryOut]

@@ -30,6 +30,8 @@ class BingoGame:
     called_numbers: set[int] = field(default_factory=set)
     players: dict[int, BingoPlayer] = field(default_factory=dict)
     winner_user_id: int | None = None
+    # 몇 번째 판인지. 승자가 나온 뒤 누군가 다시 join 하면 1씩 올라간다.
+    round: int = 1
     last_touched: float = 0.0
 
 
@@ -63,10 +65,11 @@ class BingoGameStore:
                 game = BingoGame(channel_id=channel_id, last_touched=self._clock())
                 self._games[channel_id] = game
             elif game.winner_user_id is not None:
-                # Someone re-joining after a win starts a fresh game.
+                # Someone re-joining after a win starts a fresh game (new round).
                 game.called_numbers = set()
                 game.players = {}
                 game.winner_user_id = None
+                game.round += 1
             game.last_touched = self._clock()
             if user_id not in game.players:
                 # 처음 참가하는 유저에게만 새 보드를 발급한다 (재접속 시 기존 보드 유지).

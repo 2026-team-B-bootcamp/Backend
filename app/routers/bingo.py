@@ -36,6 +36,7 @@ def _serialize(game: BingoGame, requester_id: int) -> BingoStateResponse:
         my_board=my_player.board if my_player else None,
         players=players,
         winner_user_id=game.winner_user_id,
+        round=game.round,
     )
 
 

@@ -40,6 +40,8 @@ class WordEntry:
 class WordChainGame:
     channel_id: int
     status: str = WAITING
+    # 몇 번째 판인지. 끝난 판에 다시 들어와 새 대기실이 열릴 때 1씩 올라간다.
+    round: int = 1
     players: list[WordChainPlayer] = field(default_factory=list)
     turn_pos: int = 0
     words: list[WordEntry] = field(default_factory=list)
@@ -130,8 +132,9 @@ class WordChainStore:
                 self._games[channel_id] = game
             self._apply_timeouts(game, now)
             if game.status == FINISHED:
-                # 끝난 판에 다시 들어오면 새 대기실을 연다.
+                # 끝난 판에 다시 들어오면 새 대기실을 연다 (다음 라운드).
                 game.status = WAITING
+                game.round += 1
                 game.players = []
                 game.words = []
                 game.used = set()
