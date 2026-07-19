@@ -11,6 +11,7 @@ dependencies = [
     "fastapi>=0.139.0",
     "pydantic-settings>=2.7.0",
     "pyjwt>=2.10.0",
+    "python-multipart>=0.0.32",
     "sqlalchemy[asyncio]>=2.0.36",
     "uvicorn[standard]>=0.51.0",
 ]
@@ -33,7 +34,7 @@ extend-exclude = ["alembic/versions"]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.flake8-bugbear]
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query"]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.File"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
