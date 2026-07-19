@@ -33,6 +33,11 @@ extend-exclude = ["alembic/versions"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# 데모 시딩 스크립트는 긴 한국어 예시 문장(채팅 메시지)을 그대로 담고 있어
+# 줄 길이 제한(E501)을 면제한다. 문장을 쪼개면 오히려 읽기 어려워진다.
+"scripts/seed_demo.py" = ["E501"]
+
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.File"]
 
