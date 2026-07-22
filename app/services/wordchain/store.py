@@ -1,17 +1,24 @@
-"""끝말잇기 게임 세션의 상태를 메모리에 저장하고 전이시키는 저장소.
+"""끝말잇기 게임 세션의 상태를 Redis에 저장하고 전이시키는 저장소.
 
 routers/wordchain.py의 각 엔드포인트가 호출하는 진입점이며, 단어 자체의 유효성
 검사는 logic.py에 위임한다. 상태는 대기(waiting) → 진행(playing) → 종료(finished)
 순서로 전이한다.
+
+저장 방식: 게임 하나를 JSON으로 직렬화해 "game:wordchain:{채널id}" 키에 TTL과
+함께 저장한다. 방치된 게임은 Redis가 TTL 만료로 알아서 지우므로 별도의 청소
+로직이 필요 없고, 워커가 여러 개여도 모두 같은 상태를 본다. 동시 요청은
+채널별 Redis 분산 락으로 직렬화한다 (이전의 asyncio.Lock은 한 프로세스 안에서만
+유효했다).
 """
 
-import asyncio
+import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from fastapi import HTTPException, status
 
+from app.core.redis import get_redis
 from app.services.wordchain.logic import allowed_first_chars, is_hangul_word
 
 TTL_SECONDS = 3600
@@ -49,7 +56,6 @@ class WordChainGame:
     winner_user_id: int | None = None
     last_event: str | None = None
     turn_deadline: float | None = None
-    last_touched: float = 0.0
 
     def find_player(self, user_id: int) -> WordChainPlayer | None:
         return next((p for p in self.players if p.user_id == user_id), None)
@@ -63,25 +69,48 @@ class WordChainGame:
         return self.players[self.turn_pos]
 
 
+def _to_json(game: WordChainGame) -> str:
+    data = asdict(game)
+    data["used"] = sorted(game.used)  # set은 JSON에 없으므로 리스트로 변환
+    return json.dumps(data)
+
+
+def _from_json(raw: str) -> WordChainGame:
+    data = json.loads(raw)
+    data["players"] = [WordChainPlayer(**p) for p in data["players"]]
+    data["words"] = [WordEntry(**w) for w in data["words"]]
+    data["used"] = set(data["used"])
+    return WordChainGame(**data)
+
+
 class WordChainStore:
     def __init__(
         self,
         ttl_seconds: float = TTL_SECONDS,
         turn_seconds: float = TURN_SECONDS,
-        clock: Callable[[], float] = time.monotonic,
+        # 턴 마감 시각이 Redis를 거쳐 워커 간에 공유되므로, 프로세스마다 기준이
+        # 다른 monotonic 대신 벽시계(time.time)를 쓴다.
+        clock: Callable[[], float] = time.time,
     ) -> None:
-        self._games: dict[int, WordChainGame] = {}
-        self._lock = asyncio.Lock()
         self._ttl = ttl_seconds
         self._turn = turn_seconds
         self._clock = clock
 
-    def _sweep(self) -> None:
-        # 오래 방치돼 TTL이 지난 게임은 메모리에서 정리한다.
-        now = self._clock()
-        expired = [cid for cid, g in self._games.items() if now - g.last_touched > self._ttl]
-        for cid in expired:
-            del self._games[cid]
+    def _key(self, channel_id: int) -> str:
+        return f"game:wordchain:{channel_id}"
+
+    def _lock(self, channel_id: int):
+        # 같은 채널에 대한 동시 요청을 워커에 상관없이 한 줄로 세우는 분산 락.
+        return get_redis().lock(f"lock:wordchain:{channel_id}", timeout=10)
+
+    async def _load(self, channel_id: int) -> WordChainGame | None:
+        raw = await get_redis().get(self._key(channel_id))
+        return _from_json(raw) if raw else None
+
+    async def _save(self, game: WordChainGame) -> None:
+        # 저장할 때마다 TTL을 다시 걸어준다 — 활동이 있는 게임은 계속 살아 있고,
+        # 방치된 게임은 TTL 만료로 Redis에서 자동 소멸한다.
+        await get_redis().set(self._key(game.channel_id), _to_json(game), ex=int(self._ttl))
 
     def _advance_turn(self, game: WordChainGame) -> None:
         # 다음 자리부터 한 바퀴 돌며 탈락하지 않은 플레이어를 찾아 차례를 넘긴다.
@@ -123,13 +152,11 @@ class WordChainStore:
         return max(0, int(game.turn_deadline - self._clock()))
 
     async def join(self, channel_id: int, user_id: int, display_name: str) -> WordChainGame:
-        async with self._lock:
-            self._sweep()
+        async with self._lock(channel_id):
             now = self._clock()
-            game = self._games.get(channel_id)
+            game = await self._load(channel_id)
             if game is None:
-                game = WordChainGame(channel_id=channel_id, last_touched=now)
-                self._games[channel_id] = game
+                game = WordChainGame(channel_id=channel_id)
             self._apply_timeouts(game, now)
             if game.status == FINISHED:
                 # 끝난 판에 다시 들어오면 새 대기실을 연다 (다음 라운드).
@@ -147,15 +174,14 @@ class WordChainStore:
                     status_code=status.HTTP_409_CONFLICT,
                     detail="게임이 이미 진행 중이에요. 다음 라운드에 참여하세요",
                 )
-            game.last_touched = now
             if game.find_player(user_id) is None:
                 game.players.append(WordChainPlayer(user_id=user_id, display_name=display_name))
+            await self._save(game)
             return game
 
     async def start(self, channel_id: int, user_id: int) -> WordChainGame:
-        async with self._lock:
-            self._sweep()
-            game = self._games.get(channel_id)
+        async with self._lock(channel_id):
+            game = await self._load(channel_id)
             if game is None or game.find_player(user_id) is None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT, detail="먼저 게임에 참여하세요"
@@ -173,22 +199,21 @@ class WordChainStore:
             game.status = PLAYING
             game.turn_pos = 0
             game.turn_deadline = now + self._turn
-            game.last_touched = now
             first = game.players[0]
             game.last_event = f"게임 시작! {first.display_name}님이 첫 단어를 입력하세요"
+            await self._save(game)
             return game
 
     async def submit(self, channel_id: int, user_id: int, word: str) -> WordChainGame:
-        async with self._lock:
-            self._sweep()
-            game = self._games.get(channel_id)
+        async with self._lock(channel_id):
+            game = await self._load(channel_id)
             if game is None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT, detail="진행 중인 게임이 없어요"
                 )
             now = self._clock()
-            self._apply_timeouts(game, now)
-            game.last_touched = now
+            if self._apply_timeouts(game, now):
+                await self._save(game)
             if game.status != PLAYING:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT, detail="진행 중인 게임이 아니에요"
@@ -229,16 +254,18 @@ class WordChainStore:
             game.last_event = None
             self._advance_turn(game)
             game.turn_deadline = now + self._turn
+            await self._save(game)
             return game
 
     async def get(self, channel_id: int) -> tuple[WordChainGame | None, bool]:
         """게임과 함께, 지연 타임아웃 판정으로 상태가 바뀌었는지를 돌려준다."""
-        async with self._lock:
-            self._sweep()
-            game = self._games.get(channel_id)
+        async with self._lock(channel_id):
+            game = await self._load(channel_id)
             if game is None:
                 return None, False
             changed = self._apply_timeouts(game, self._clock())
+            if changed:
+                await self._save(game)
             return game, changed
 
 
