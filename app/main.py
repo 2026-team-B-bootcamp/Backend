@@ -3,6 +3,7 @@
 요청 흐름: 클라이언트 -> 여기서 등록된 라우터(routers/) -> 서비스(services/) -> 모델/DB(models/).
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.core.redis import get_redis
 from app.db.base import engine
 from app.routers import (
     ai,
@@ -25,16 +27,21 @@ from app.routers import (
     wordchain,
     ws,
 )
+from app.services.realtime import hub
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 (STATIC_DIR / "avatars").mkdir(parents=True, exist_ok=True)
 
 
 # 앱 생명주기 관리 함수. yield 이전은 시작 시, 이후는 종료 시 실행된다.
-# 여기서는 서버가 꺼질 때 DB 엔진 연결을 정리(dispose)한다.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 워커당 하나씩 Redis pub/sub 구독 태스크를 띄운다 — 다른 워커가 publish한
+    # 브로드캐스트를 받아 이 워커에 붙은 WebSocket들에 전달하는 역할 (realtime.py).
+    listener = asyncio.create_task(hub.listen())
     yield
+    listener.cancel()
+    await get_redis().aclose()
     await engine.dispose()
 
 
