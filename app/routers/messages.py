@@ -53,12 +53,14 @@ async def send_message(
 async def list_messages(
     channel_id: int,
     after_id: int | None = None,
+    before_id: int | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[MessageOut]:
     channel = await server_service.require_channel_access(db, channel_id, current_user.id)
-    # after_id가 있으면 "그 이후 메시지"만, 없으면 "최신 메시지 목록"을 가져온다.
-    rows = await message_service.list_messages(db, channel_id, after_id)
+    # after_id가 있으면 "그 이후 메시지"(재연결 보충), before_id가 있으면
+    # "그 이전 메시지"(무한 스크롤), 없으면 "최신 메시지 목록"을 가져온다.
+    rows = await message_service.list_messages(db, channel_id, after_id, before_id)
     tags_map = await tag_service.get_server_tags_map(db, channel.server_id)
     return [
         MessageOut(
