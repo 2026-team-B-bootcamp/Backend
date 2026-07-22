@@ -102,6 +102,42 @@ async def test_after_id_cursor_returns_only_new(client: AsyncClient, register):
     assert empty == []
 
 
+async def test_before_id_cursor_pages_history(client: AsyncClient, register):
+    """무한 스크롤용 before_id 커서 — 커서 이전 메시지를 오름차순으로 돌려준다."""
+    token_a, _token_b, _server_id, channel_id = await _setup_server_with_two_members(
+        client, register
+    )
+
+    ids = []
+    for text in ("m1", "m2", "m3", "m4", "m5"):
+        resp = await client.post(
+            f"/channels/{channel_id}/messages",
+            json={"content": text},
+            headers=_headers(token_a),
+        )
+        ids.append(resp.json()["id"])
+
+    # 중간 커서: 그보다 오래된 메시지만, 오래된 순으로
+    older = (
+        await client.get(
+            f"/channels/{channel_id}/messages",
+            params={"before_id": ids[2]},
+            headers=_headers(token_a),
+        )
+    ).json()
+    assert [m["id"] for m in older] == ids[:2]
+
+    # 첫 메시지 커서: 더 오래된 게 없으니 빈 목록 (클라이언트는 hasMore=false 처리)
+    empty = (
+        await client.get(
+            f"/channels/{channel_id}/messages",
+            params={"before_id": ids[0]},
+            headers=_headers(token_a),
+        )
+    ).json()
+    assert empty == []
+
+
 async def test_non_member_forbidden(client: AsyncClient, register):
     token_a, _token_b, _server_id, channel_id = await _setup_server_with_two_members(
         client, register
