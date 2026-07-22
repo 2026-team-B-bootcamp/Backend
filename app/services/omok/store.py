@@ -1,17 +1,23 @@
-"""채널별 오목 게임 상태를 메모리에 저장하고 join/place(착수)/reset을 처리한다.
+"""채널별 오목 게임 상태를 Redis에 저장하고 join/place(착수)/reset을 처리한다.
 
 라우터(routers/omok.py)가 이 store를 호출해 대국을 열고 진행시킨다. 착수 시
 승리(5목) 판정은 이 파일의 find_winning_line이 담당하고, 통과하면 store가
-턴을 넘기거나 게임을 종료 상태로 바꾼다. 오래 방치된 채널은 TTL이 지나면
-_sweep에서 자동으로 정리된다.
+턴을 넘기거나 게임을 종료 상태로 바꾼다.
+
+저장 방식: 게임 하나를 JSON으로 직렬화해 "game:omok:{채널id}" 키에 TTL과 함께
+저장한다. 방치된 게임은 Redis가 TTL 만료로 알아서 지우므로 별도의 청소 로직이
+필요 없고, 워커가 여러 개여도 모두 같은 상태를 본다. 동시 요청은 채널별 Redis
+분산 락으로 직렬화한다 (이전의 asyncio.Lock은 한 프로세스 안에서만 유효했다).
 """
 
-import asyncio
+import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from fastapi import HTTPException, status
+
+from app.core.redis import get_redis
 
 TTL_SECONDS = 3600
 BOARD_SIZE = 15
@@ -74,7 +80,6 @@ class OmokGame:
     winning_line: list[list[int]] | None = None
     last_move: list[int] | None = None
     move_count: int = 0
-    last_touched: float = 0.0
 
     def find_player(self, user_id: int) -> OmokPlayer | None:
         return next((p for p in self.players if p.user_id == user_id), None)
@@ -96,73 +101,79 @@ class OmokGame:
         self.move_count = 0
 
 
+def _to_json(game: OmokGame) -> str:
+    return json.dumps(asdict(game))
+
+
+def _from_json(raw: str) -> OmokGame:
+    data = json.loads(raw)
+    data["players"] = [OmokPlayer(**p) for p in data["players"]]
+    return OmokGame(**data)
+
+
 class OmokStore:
     def __init__(
         self,
         ttl_seconds: float = TTL_SECONDS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._games: dict[int, OmokGame] = {}
-        self._lock = asyncio.Lock()
         self._ttl = ttl_seconds
         self._clock = clock
 
-    def _sweep(self) -> None:
-        # 마지막 활동으로부터 TTL(1시간)이 지난 채널의 게임은 메모리에서 지운다.
-        now = self._clock()
-        expired = [cid for cid, g in self._games.items() if now - g.last_touched > self._ttl]
-        for cid in expired:
-            del self._games[cid]
+    def _key(self, channel_id: int) -> str:
+        return f"game:omok:{channel_id}"
 
-    def _get_or_create(self, channel_id: int) -> OmokGame:
-        game = self._games.get(channel_id)
-        if game is None:
-            game = OmokGame(channel_id=channel_id, last_touched=self._clock())
-            self._games[channel_id] = game
-        return game
+    def _lock(self, channel_id: int):
+        # 같은 채널에 대한 동시 요청을 워커에 상관없이 한 줄로 세우는 분산 락.
+        return get_redis().lock(f"lock:omok:{channel_id}", timeout=10)
+
+    async def _load(self, channel_id: int) -> OmokGame | None:
+        raw = await get_redis().get(self._key(channel_id))
+        return _from_json(raw) if raw else None
+
+    async def _save(self, game: OmokGame) -> None:
+        # 저장할 때마다 TTL을 다시 걸어준다 — 활동이 있는 게임은 계속 살아 있고,
+        # 방치된 게임은 TTL 만료로 Redis에서 자동 소멸한다.
+        await get_redis().set(self._key(game.channel_id), _to_json(game), ex=int(self._ttl))
 
     async def join(self, channel_id: int, user_id: int, display_name: str) -> OmokGame:
-        async with self._lock:
-            self._sweep()
-            now = self._clock()
-            game = self._get_or_create(channel_id)
-            game.last_touched = now
+        async with self._lock(channel_id):
+            game = await self._load(channel_id)
+            if game is None:
+                game = OmokGame(channel_id=channel_id)
 
             if game.status == FINISHED:
                 # 끝난 판에 다시 들어오면 판을 비우고 새 라운드를 연다.
                 game._reset_board()
                 game.status = PLAYING if len(game.players) >= 2 else WAITING
 
-            existing = game.find_player(user_id)
-            if existing is not None:
-                return game
+            if game.find_player(user_id) is None:
+                if len(game.players) >= 2:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail="이미 두 명이 대국 중이에요. 관전만 할 수 있어요",
+                    )
 
-            if len(game.players) >= 2:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="이미 두 명이 대국 중이에요. 관전만 할 수 있어요",
+                # 먼저 들어온 사람이 흑(선공), 두 번째가 백이 된다.
+                color = BLACK if not game.players else WHITE
+                game.players.append(
+                    OmokPlayer(user_id=user_id, display_name=display_name, color=color)
                 )
+                if len(game.players) == 2:
+                    # 두 명이 모이면 바로 대국 시작, 흑이 먼저 둔다.
+                    game.status = PLAYING
+                    game.turn = BLACK
 
-            # 먼저 들어온 사람이 흑(선공), 두 번째가 백이 된다.
-            color = BLACK if not game.players else WHITE
-            game.players.append(
-                OmokPlayer(user_id=user_id, display_name=display_name, color=color)
-            )
-            if len(game.players) == 2:
-                # 두 명이 모이면 바로 대국 시작, 흑이 먼저 둔다.
-                game.status = PLAYING
-                game.turn = BLACK
+            await self._save(game)
             return game
 
     async def place(self, channel_id: int, user_id: int, row: int, col: int) -> OmokGame:
-        async with self._lock:
-            self._sweep()
-            game = self._games.get(channel_id)
+        async with self._lock(channel_id):
+            game = await self._load(channel_id)
             if game is None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT, detail="진행 중인 게임이 없어요"
                 )
-            game.last_touched = self._clock()
             if game.status != PLAYING:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT, detail="진행 중인 게임이 아니에요"
@@ -203,22 +214,18 @@ class OmokStore:
             else:
                 # 승부가 안 났으면 턴을 상대에게 넘긴다.
                 game.turn = WHITE if game.turn == BLACK else BLACK
+
+            await self._save(game)
             return game
 
     async def reset(self, channel_id: int) -> OmokGame:
-        async with self._lock:
-            self._sweep()
-            game = self._get_or_create(channel_id)
-            game.status = WAITING
-            game.players = []
-            game._reset_board()
-            game.last_touched = self._clock()
+        async with self._lock(channel_id):
+            game = OmokGame(channel_id=channel_id)
+            await self._save(game)
             return game
 
     async def get(self, channel_id: int) -> OmokGame | None:
-        async with self._lock:
-            self._sweep()
-            return self._games.get(channel_id)
+        return await self._load(channel_id)
 
 
 store = OmokStore()

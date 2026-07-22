@@ -162,6 +162,9 @@ async def test_draw_when_board_fills_without_winner():
     game.board[0][0] = EMPTY  # (0,0)은 패턴상 흑 자리
     game.move_count = BOARD_SIZE * BOARD_SIZE - 1
     game.turn = BLACK
+    # get()은 Redis에서 역직렬화한 사본을 주므로, 여기서 만든 보드 상태를
+    # 저장소에 직접 반영해야 다음 place()가 이 상태를 본다.
+    await store._save(game)
     result = await store.place(1, 1, 0, 0)
     assert result.status == "finished"
     assert result.winner_user_id is None

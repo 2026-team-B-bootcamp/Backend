@@ -25,6 +25,16 @@ services:
     depends_on:
       - db
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   api:
     build: .
     ports:
@@ -36,12 +46,15 @@ services:
       # 아직 코드에서 실제로 쓰지는 않고, 나중에 DB 연동을 붙일 때를 위해
       # 미리 정해둔 값이다.
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # pub/sub·게임 세션·AI 캐시가 쓰는 Redis. "redis"는 compose 서비스 이름이다.
+      REDIS_URL: redis://redis:6379/0
       # Windows(WSL2)에서 윈도우 파일시스템을 bind-mount 하면 파일 변경 감지
       # (inotify)가 불안정한 경우가 많다. 폴링 방식으로 강제 전환해
       # uvicorn --reload 핫 리로드가 항상 동작하도록 한다.
       WATCHFILES_FORCE_POLLING: "true"
     depends_on:
       - db
+      - redis
 
 volumes:
   pgdata:

@@ -1,16 +1,33 @@
 from collections.abc import AsyncGenerator
 
+import fakeredis.aioredis
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+import app.core.redis as app_redis
 import app.models  # noqa: F401  (register models on Base.metadata)
 from app.core.deps import get_db
 from app.db.base import Base
 from app.main import app
-from app.services.game_registry import GameRegistry, get_game_registry
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def fake_redis():
+    """모든 테스트에서 전역 Redis 클라이언트를 fakeredis(인메모리 모조품)로 바꾼다.
+
+    게임 세션·pub/sub·AI 캐시·rate limit이 전부 Redis를 쓰므로, 테스트마다
+    새 fakeredis를 꽂아 상태를 격리한다 (실제 Redis 서버 없이 테스트 가능).
+    코드가 get_redis()를 통해서만 클라이언트에 접근하기 때문에 이 교체가 먹힌다.
+    """
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    original = app_redis.client
+    app_redis.client = fake
+    yield fake
+    app_redis.client = original
+    await fake.aclose()
 
 
 @pytest_asyncio.fixture
@@ -35,11 +52,8 @@ async def client(db_engine) -> AsyncGenerator[AsyncClient, None]:
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
-    # channel_id는 테스트마다 1부터 다시 매겨지므로, 게임 락도 테스트별로 새로 줘야
-    # 앞 테스트에서 남은 락이 다음 테스트의 채널 id와 우연히 충돌하지 않는다.
-    # (인스턴스를 클로저로 한 번만 만들어야 요청마다 같은 락 상태를 공유한다.)
-    test_registry = GameRegistry()
-    app.dependency_overrides[get_game_registry] = lambda: test_registry
+    # 게임 점유 상태(game_registry)는 이제 Redis에 있고, fake_redis 픽스처가
+    # 테스트마다 새 인스턴스를 꽂으므로 테스트 간 격리가 저절로 된다.
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
