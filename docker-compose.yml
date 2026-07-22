@@ -1,6 +1,12 @@
 services:
   db:
-    image: postgres:16
+    # postgres:16 + pgvector extension 포함 이미지. 데이터 포맷은 PG16 그대로라
+    # 기존 pgdata 볼륨을 그대로 쓴다. extension 활성화(CREATE EXTENSION)는
+    # alembic 마이그레이션이 담당한다.
+    # -trixie 고정 이유: 볼륨을 초기화한 기존 postgres:16이 trixie(glibc 2.41)
+    # 기반이라, bookworm 기반 기본 태그를 쓰면 collation 버전 불일치로
+    # CREATE DATABASE가 실패한다.
+    image: pgvector/pgvector:pg16-trixie
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}

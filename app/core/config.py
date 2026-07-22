@@ -23,6 +23,21 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"
 
+    # 유사 태그 매칭(pgvector) 설정. 태그 텍스트를 Gemini 임베딩으로 벡터화해
+    # 코사인 유사도가 임계값 이상이면 완전일치와 똑같이 "겹치는 관심사"로 본다.
+    gemini_embedding_model: str = "gemini-embedding-001"
+    # 768: MRL 축소 차원. 짧은 태그 매칭엔 3072 풀 차원과 품질 차이가 없고
+    # 저장 공간이 1/4이다. 바꾸면 기존 tag_embeddings 데이터와 호환되지 않는다.
+    tag_embedding_dim: int = 768
+    # 기준 쌍 실측으로 정한 값 (gemini-embedding-001, SEMANTIC_SIMILARITY, 768차원).
+    # 태그는 "롤 티어 실버4", "맛집탐방(특히 라멘맛집)" 같은 문구형이 기본이라
+    # 문구 쌍으로 보정했다: 유사 쌍(롤 티어 실버4↔롤 골드 승급전 중 0.877,
+    # 포켓몬 시리즈 전부 클리어↔피카츄 굿즈 모음 0.844)은 0.84 이상,
+    # 무관 쌍(보드게임 좋아함↔여행 계획 짜는 게 취미 0.834)은 미만으로 갈렸다.
+    # 문구형은 단어형("포켓몬"↔"피카츄" 0.92)보다 전반적으로 낮게 나오므로
+    # 단어 태그만 쓴다면 0.86까지 올려도 된다. .env로 조정 가능.
+    tag_similarity_threshold: float = 0.84
+
     @property
     def async_database_url(self) -> str:
         # database_url이 동기 드라이버(postgresql://) 형식으로 들어와도

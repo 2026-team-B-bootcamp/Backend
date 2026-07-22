@@ -27,4 +27,7 @@ async def upsert_tags(
     tag = await tag_service.upsert_tags(
         db, server_id, current_user.id, payload.tag1, payload.tag2, payload.tag3
     )
+    # 새로 등장한 태그 텍스트만 임베딩해 저장한다 (유사 태그 매칭용).
+    # 이미 임베딩된 태그는 API 호출 없이 넘어가고, 실패해도 태그 저장은 유지된다.
+    await tag_service.ensure_embeddings(db, [payload.tag1, payload.tag2, payload.tag3])
     return TagResponse(tags=tag_service.tag_values(tag))

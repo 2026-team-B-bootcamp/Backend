@@ -94,15 +94,19 @@ async def list_members(
     # 서버 내 모든 멤버의 태그를 한 번에 불러온 뒤, 각 멤버마다 내 태그와
     # 겹치는 항목(common_with_me)을 계산한다. 이 값으로 프런트에서
     # "나와 관심사가 겹치는 사람"을 강조해서 보여준다 (서비스 핵심 기능).
+    # 완전일치뿐 아니라 임베딩 유사도가 임계값 이상인 태그(포켓몬↔피카츄)도
+    # 겹치는 것으로 친다 — 서버 전체 태그에 대한 유사도 조회는 쿼리 1회다.
     tags_map = await tag_service.get_server_tags_map(db, server_id)
     my_tags = tags_map.get(current_user.id, [])
+    all_tags = [t for tags in tags_map.values() for t in tags]
+    similar_map = await tag_service.get_similar_map(db, my_tags, all_tags)
 
     response: list[MemberResponse] = []
     for member in members:
         member_tags = tags_map.get(member.id, [])
         common = (
             [] if member.id == current_user.id
-            else tag_service.common_tags(my_tags, member_tags)
+            else tag_service.matched_tags(my_tags, member_tags, similar_map)
         )
         response.append(
             MemberResponse(
