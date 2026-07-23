@@ -115,9 +115,15 @@ async def welcome_message(
 ) -> MessageOut | None:
     """채널에 처음 들어온 사람을 위한 환영 + 자기소개 카드를 한 번만 남긴다.
 
-    프런트가 채널에 진입할 때마다 부르지만, "이 채널에 내 메시지가 하나도 없을 때"만
-    실제로 카드를 만든다. 이 조건은 DB 상태로 판정하므로 재접속·다른 기기·캐시 삭제와
-    무관하게 항상 한 번이다. 이미 말한 적 있는 사람에겐 null을 돌려주고 끝난다.
+    두 가지 조건을 모두 만족할 때만 만든다:
+    1) 이 채널에 내 메시지가 하나도 없다 — DB로 판정하므로 재접속·다른 기기·캐시 삭제와
+       무관하게 항상 한 번이다.
+    2) 관심사 태그가 등록돼 있다 — 자기소개의 알맹이가 태그다. 태그 없이 먼저 띄우면
+       "반갑습니다" 뿐인 맹탕 카드가 나오고, 그게 1)을 소진해버려 정작 태그를 등록한
+       뒤에는 카드가 안 나온다. 그래서 태그가 빌 때는 아무것도 만들지 않고 넘어가고,
+       프런트가 태그 등록 직후에 다시 호출한다.
+
+    둘 중 하나라도 어긋나면 null을 돌려주고 끝난다(프런트는 그냥 부르기만 하면 된다).
     """
     channel = await server_service.require_channel_access(db, channel_id, current_user.id)
     if await message_service.has_message_in_channel(db, channel_id, current_user.id):
@@ -125,6 +131,8 @@ async def welcome_message(
 
     tags_map = await tag_service.get_server_tags_map(db, channel.server_id)
     my_tags = [t for t in tags_map.get(current_user.id, []) if t and t.strip()]
+    if not my_tags:
+        return None
     # 모임에서 많이 쓰이는 관심사 — 겹치는 지점을 짚어 말 걸 실마리를 만든다.
     server_tags = [tag for tag, _ in tag_stats.aggregate(tags_map)]
 
