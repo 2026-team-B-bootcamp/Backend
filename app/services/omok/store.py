@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass, field
 from fastapi import HTTPException, status
 
 from app.core.redis import get_redis
+from app.services.game_ttl import ttl_for
 
 TTL_SECONDS = 3600
 BOARD_SIZE = 15
@@ -134,7 +135,12 @@ class OmokStore:
     async def _save(self, game: OmokGame) -> None:
         # 저장할 때마다 TTL을 다시 걸어준다 — 활동이 있는 게임은 계속 살아 있고,
         # 방치된 게임은 TTL 만료로 Redis에서 자동 소멸한다.
-        await get_redis().set(self._key(game.channel_id), _to_json(game), ex=int(self._ttl))
+        await get_redis().set(
+            self._key(game.channel_id),
+            _to_json(game),
+            # 대기·종료 상태로 방치되면 30초 뒤 자동으로 사라진다(game_ttl 참고).
+            ex=ttl_for(game.status, self._ttl),
+        )
 
     async def join(self, channel_id: int, user_id: int, display_name: str) -> OmokGame:
         async with self._lock(channel_id):

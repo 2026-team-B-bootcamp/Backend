@@ -1,4 +1,4 @@
-"""IcebreakerProvider / TagInsightProvider의 stub(임시) 구현체.
+"""IcebreakerProvider / TagInsightProvider / WelcomeProvider의 stub(임시) 구현체.
 
 실제 LLM 호출 없이 미리 정해둔 템플릿과 규칙으로 결과를 만든다.
 GEMINI_API_KEY가 없는 환경(로컬 개발, CI)의 기본 동작이자,
@@ -7,7 +7,12 @@ gemini_provider가 호출에 실패했을 때의 폴백이기도 하다.
 
 import random
 
-from app.services.ai.base import IcebreakerProvider, TagInsight, TagInsightProvider
+from app.services.ai.base import (
+    IcebreakerProvider,
+    TagInsight,
+    TagInsightProvider,
+    WelcomeProvider,
+)
 
 # "{이름}"은 service.py가 대상 이름으로, "{tag}"는 여기서 태그로 치환한다.
 _TEMPLATES = [
@@ -86,3 +91,26 @@ class TemplateTagInsightProvider(TagInsightProvider):
             if candidate not in picked:
                 picked.append(candidate)
         return TagInsight(summary=summary, suggestions=picked[:suggest_count])
+
+
+class TemplateWelcomeProvider(WelcomeProvider):
+    """LLM 없이 관심사를 문장에 끼워 넣는 폴백 환영 문구 제공자."""
+
+    cacheable = False
+
+    async def generate(self, my_tags: list[str], server_tags: list[str]) -> str:
+        mine = [t for t in my_tags if t and t.strip()]
+        if not mine:
+            return (
+                "{이름}님이 채널에 들어왔어요. 반갑습니다! "
+                "관심사를 등록하면 통하는 사람을 더 쉽게 찾을 수 있어요."
+            )
+        joined = " · ".join(mine)
+        # 모임에 이미 있는 관심사와 겹치면 그걸 짚어준다 — 말 붙일 실마리가 된다.
+        shared = [t for t in mine if t in set(server_tags)]
+        if shared:
+            return (
+                f"{{이름}}님이 들어왔어요. {joined}에 관심이 있대요 — "
+                f"'{shared[0]}' 좋아하는 분들 반가우시겠네요!"
+            )
+        return f"{{이름}}님이 들어왔어요. {joined}에 관심이 있대요. 먼저 말 걸어보세요!"
