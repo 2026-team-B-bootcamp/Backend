@@ -32,6 +32,7 @@ def _serialize(game: BingoGame, requester_id: int) -> BingoStateResponse:
         for pid, player in game.players.items()
     ]
     return BingoStateResponse(
+        status=game.status,
         called_numbers=sorted(game.called_numbers),
         my_board=my_player.board if my_player else None,
         players=players,
@@ -58,6 +59,20 @@ async def join_bingo(
     # 채널을 빙고 게임으로 점유(다른 게임과 동시 진행 방지)한 뒤 참가 처리.
     await registry.acquire(channel_id, "bingo")
     game = await store.join(channel_id, current_user.id, current_user.display_name)
+    await _notify(channel_id)
+    return _serialize(game, current_user.id)
+
+
+@router.post("/{channel_id}/bingo/start", response_model=BingoStateResponse)
+async def start_bingo(
+    channel_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    store: BingoGameStore = Depends(get_bingo_store),
+) -> BingoStateResponse:
+    await server_service.require_channel_access(db, channel_id, current_user.id)
+    # 2명 이상 모였을 때만 대기 → 진행으로 전환한다.
+    game = await store.start(channel_id, current_user.id)
     await _notify(channel_id)
     return _serialize(game, current_user.id)
 

@@ -20,6 +20,10 @@ from app.services.bingo.logic import WIN_LINES, count_completed_lines, generate_
 
 TTL_SECONDS = 3600
 
+WAITING = "waiting"
+PLAYING = "playing"
+FINISHED = "finished"
+
 
 @dataclass
 class BingoPlayer:
@@ -31,6 +35,8 @@ class BingoPlayer:
 @dataclass
 class BingoGame:
     channel_id: int
+    # 대기(2명 모으는 중) → 진행 → 종료. 진행 중엔 새 참가 불가(관전만).
+    status: str = WAITING
     called_numbers: set[int] = field(default_factory=set)
     players: dict[int, BingoPlayer] = field(default_factory=dict)
     winner_user_id: int | None = None
@@ -79,17 +85,44 @@ class BingoGameStore:
             game = await self._load(channel_id)
             if game is None:
                 game = BingoGame(channel_id=channel_id)
-            elif game.winner_user_id is not None:
-                # Someone re-joining after a win starts a fresh game (new round).
+            elif game.status == FINISHED:
+                # 끝난 판에 다시 들어오면 새 대기실을 연다 (다음 라운드).
+                game.status = WAITING
                 game.called_numbers = set()
                 game.players = {}
                 game.winner_user_id = None
                 game.round += 1
+            # 진행 중이면 새 참가 불가 — 관전만 (이미 참가자는 그대로 통과해 상태만 받는다).
+            if game.status == PLAYING and user_id not in game.players:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="이미 진행 중이에요. 관전만 할 수 있어요",
+                )
             if user_id not in game.players:
                 # 처음 참가하는 유저에게만 새 보드를 발급한다 (재접속 시 기존 보드 유지).
                 game.players[user_id] = BingoPlayer(
                     user_id=user_id, display_name=display_name, board=generate_board()
                 )
+            await self._save(game)
+            return game
+
+    async def start(self, channel_id: int, user_id: int) -> BingoGame:
+        async with self._lock(channel_id):
+            game = await self._load(channel_id)
+            if game is None or user_id not in game.players:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="먼저 게임에 참여하세요"
+                )
+            if game.status != WAITING:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT, detail="대기 중인 게임이 아니에요"
+                )
+            if len(game.players) < 2:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="2명 이상 모여야 시작할 수 있어요",
+                )
+            game.status = PLAYING
             await self._save(game)
             return game
 
@@ -100,6 +133,11 @@ class BingoGameStore:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Not a player in this game",
+                )
+            if game.status != PLAYING:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="진행 중인 게임이 아니에요",
                 )
             # 번호를 호출 목록에 추가하면, 이 번호를 가진 모든 플레이어의 보드에
             # 자동으로 반영된다(마킹 여부는 called_numbers와의 비교로 계산되므로).
@@ -118,12 +156,18 @@ class BingoGameStore:
                     game.winner_user_id = (
                         user_id if user_id in qualified else qualified[0]
                     )
+                    game.status = FINISHED
             await self._save(game)
             return game
 
     async def get(self, channel_id: int) -> BingoGame | None:
         async with self._lock(channel_id):
             return await self._load(channel_id)
+
+    async def status(self, channel_id: int) -> str:
+        # 관전 유도용 상태: 없음 / 대기 / 진행중 / 종료
+        game = await self._load(channel_id)
+        return game.status if game else "none"
 
 
 store = BingoGameStore()

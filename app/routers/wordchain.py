@@ -45,7 +45,7 @@ def _serialize(game: WordChainGame, store: WordChainStore) -> WordChainStateResp
             WordEntryOut(user_id=w.user_id, display_name=w.display_name, word=w.word)
             for w in game.words
         ],
-        winner_user_id=game.winner_user_id,
+        loser_user_id=game.loser_user_id,
         seconds_left=store.seconds_left(game),
         last_event=game.last_event,
     )

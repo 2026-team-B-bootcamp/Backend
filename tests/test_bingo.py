@@ -110,6 +110,7 @@ async def test_winner_on_three_lines(client: AsyncClient, register, fresh_store,
     tokens, channel_id = await _setup_channel(client, register, 2)
     await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[0]))
     await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[1]))
+    await client.post(f"/channels/{channel_id}/bingo/start", headers=_headers(tokens[0]))
 
     last = None
     for number in range(1, 16):
@@ -125,6 +126,44 @@ async def test_winner_on_three_lines(client: AsyncClient, register, fresh_store,
     assert winner["completed_lines"] >= 3
 
 
+async def test_start_requires_two_players(client: AsyncClient, register, fresh_store):
+    tokens, channel_id = await _setup_channel(client, register, 2)
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[0]))
+    # 혼자서는 시작할 수 없다
+    solo = await client.post(f"/channels/{channel_id}/bingo/start", headers=_headers(tokens[0]))
+    assert solo.status_code == 409
+    # 대기 중에는 클릭도 막힌다
+    click = await client.post(
+        f"/channels/{channel_id}/bingo/click", json={"number": 1}, headers=_headers(tokens[0])
+    )
+    assert click.status_code == 409
+    # 2명이 되면 시작 가능 → 진행중
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[1]))
+    started = await client.post(
+        f"/channels/{channel_id}/bingo/start", headers=_headers(tokens[0])
+    )
+    assert started.status_code == 200
+    assert started.json()["status"] == "playing"
+
+
+async def test_join_while_playing_blocked_spectate(client: AsyncClient, register, fresh_store):
+    tokens, channel_id = await _setup_channel(client, register, 3)
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[0]))
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[1]))
+    await client.post(f"/channels/{channel_id}/bingo/start", headers=_headers(tokens[0]))
+
+    # 진행 중이면 세 번째 사람은 참가 불가(관전만)
+    late = await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[2]))
+    assert late.status_code == 409
+    # 관전자는 조회로 상태를 볼 수 있고 my_board는 없다
+    spectate = (
+        await client.get(f"/channels/{channel_id}/bingo", headers=_headers(tokens[2]))
+    ).json()
+    assert spectate["status"] == "playing"
+    assert spectate["my_board"] is None
+    assert len(spectate["players"]) == 2
+
+
 async def test_rejoin_after_win_resets_round(
     client: AsyncClient, register, fresh_store, monkeypatch
 ):
@@ -132,6 +171,7 @@ async def test_rejoin_after_win_resets_round(
     tokens, channel_id = await _setup_channel(client, register, 2)
     await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[0]))
     await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[1]))
+    await client.post(f"/channels/{channel_id}/bingo/start", headers=_headers(tokens[0]))
     for number in range(1, 16):
         await client.post(
             f"/channels/{channel_id}/bingo/click",
