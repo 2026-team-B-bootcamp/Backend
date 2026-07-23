@@ -3,7 +3,12 @@
 DB 접속 정보, JWT 비밀키 등 다른 모든 모듈이 여기서 값을 가져다 쓴다.
 """
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# 절대 실서비스에서 쓰면 안 되는 값 — 과거 소스에 하드코딩돼 있던 기본 시크릿.
+# 이 값(또는 빈 값/짧은 값)으로는 앱이 아예 뜨지 않게 막는다(토큰 위조 방지).
+_INSECURE_JWT_SECRET = "dev-insecure-change-me-in-production-000"
 
 
 class Settings(BaseSettings):
@@ -12,9 +17,33 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://bootcamp:changeme@localhost:5432/bootcamp"
     # 실시간 브로드캐스트(pub/sub)·게임 세션(TTL)·AI 캐시가 모두 이 Redis를 쓴다.
     redis_url: str = "redis://localhost:6379/0"
-    jwt_secret: str = "dev-insecure-change-me-in-production-000"
+    # 기본값 없음 — .env의 JWT_SECRET(예: `python -c "import secrets;
+    # print(secrets.token_urlsafe(48))"`)을 반드시 설정해야 앱이 뜬다.
+    jwt_secret: str = ""
     jwt_expire_minutes: int = 60 * 24
     algorithm: str = "HS256"
+
+    # 허용할 프론트 출처 목록(쉼표 구분). 비어 있으면(로컬 개발 기본값) main.py가
+    # localhost 정규식 방식으로 폴백한다. 배포 시 정확한 https 출처를 넣으면
+    # 그 목록만 명시적으로 허용한다. 예: "https://app.example.com,https://www.example.com"
+    cors_origins: str = ""
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        # 쉼표로 구분된 문자열을 공백을 정리한 리스트로 변환한다.
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @field_validator("jwt_secret")
+    @classmethod
+    def _reject_weak_jwt_secret(cls, value: str) -> str:
+        # 시작 시점에 강제로 검증한다 — 약한 시크릿이면 서버가 뜨지 않는다.
+        if not value or value == _INSECURE_JWT_SECRET or len(value) < 32:
+            raise ValueError(
+                "JWT_SECRET이 설정되지 않았거나 안전하지 않습니다. .env에 32자 이상의 "
+                "무작위 문자열을 설정하세요. 예: "
+                'python -c "import secrets; print(secrets.token_urlsafe(48))"'
+            )
+        return value
 
     # Gemini 아이스브레이커 설정. 키가 비어 있으면 stub 템플릿으로 동작한다.
     # 모델명은 "-latest" 별칭 대신 고정 — 별칭은 구글이 뒤에서 모델을 바꿀 수 있다.

@@ -3,6 +3,7 @@
 비밀번호는 원문 그대로 저장하지 않고 항상 이 파일을 거쳐 해시로 변환한다.
 """
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 import jwt
@@ -15,24 +16,31 @@ from app.core.config import settings
 _hasher = PasswordHasher()
 
 
-def hash_password(password: str) -> str:
+async def hash_password(password: str) -> str:
     # 회원가입 시 원문 비밀번호를 DB에 저장 가능한 해시 문자열로 바꾼다.
-    return _hasher.hash(password)
+    # argon2는 의도적으로 느린 CPU 작업이라 이벤트 루프에서 직접 돌리면 그동안
+    # 다른 요청(채팅·게임 등)이 전부 멈춘다. 스레드로 넘겨 루프를 막지 않는다.
+    return await asyncio.to_thread(_hasher.hash, password)
 
 
-def verify_password(password: str, password_hash: str) -> bool:
+async def verify_password(password: str, password_hash: str) -> bool:
     # 로그인 시 입력한 비밀번호와 저장된 해시를 비교한다.
     # 해시는 되돌릴 수 없으므로 "같은 방식으로 다시 해싱해서 비교"하는 방식으로 검증한다.
-    try:
-        return _hasher.verify(password_hash, password)
-    except VerifyMismatchError:
-        return False
+    # hash와 같은 이유로 스레드에서 실행한다(동시 로그인 시 루프 스톨 방지).
+    def _verify() -> bool:
+        try:
+            return _hasher.verify(password_hash, password)
+        except VerifyMismatchError:
+            return False
+
+    return await asyncio.to_thread(_verify)
 
 
-def create_access_token(subject: str) -> str:
+def create_access_token(subject: str, token_version: int = 0) -> str:
     # subject(보통 user id)를 담은 JWT를 발급한다. exp(만료시간)가 지나면 토큰은 무효가 된다.
+    # ver: 발급 시점의 유저 token_version. 검증 때 DB 값과 대조해 서버측 무효화를 구현한다.
     expire = datetime.now(UTC) + timedelta(minutes=settings.jwt_expire_minutes)
-    payload = {"sub": subject, "exp": expire}
+    payload = {"sub": subject, "ver": token_version, "exp": expire}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.algorithm)
 
 
