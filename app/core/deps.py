@@ -46,4 +46,8 @@ async def get_current_user(
     user = await db.get(User, user_id)
     if user is None:
         raise credentials_error
+    # 서버측 무효화: 로그아웃 등으로 token_version이 올라갔다면, 그 이전에 발급된
+    # 토큰(ver 불일치)은 아직 만료 전이라도 거부한다. (ver 없는 옛 토큰은 0으로 취급)
+    if int(payload.get("ver", 0)) != user.token_version:
+        raise credentials_error
     return user

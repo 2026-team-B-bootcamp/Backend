@@ -1,0 +1,67 @@
+# 프로덕션 스택. 개발용 docker-compose.yml과 분리한다.
+#
+# 핵심 차이점:
+#  - bind-mount·핫 리로드 없음. 소스는 이미지에 구워진 채로 실행된다(Dockerfile).
+#  - db·redis는 호스트 포트를 열지 않는다(내부 네트워크로만 접근). pgadmin 제외.
+#  - 모든 서비스 restart: unless-stopped.
+#  - 시크릿·접속정보는 커밋된 .env가 아니라 배포 플랫폼이 환경변수로 주입한다
+#    (${...}). 아래 값들은 플랫폼 대시보드/시크릿 매니저에서 설정한다:
+#    POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, JWT_SECRET,
+#    GEMINI_API_KEY, CORS_ORIGINS 등.
+services:
+  db:
+    # 개발과 동일한 pgvector 포함 PG16 이미지. extension·테이블은 alembic이 만든다.
+    image: pgvector/pgvector:pg16-trixie
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # 호스트 포트 매핑 없음 — compose 내부 네트워크(api만 접근)로만 노출한다.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # AOF 영속화 — 재시작 시 pub/sub 외 게임 세션·캐시 데이터가 유지된다.
+    command: ["redis-server", "--appendonly", "yes"]
+    # 호스트 포트 매핑 없음 — 내부 네트워크로만 접근한다.
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    # 프로덕션 Dockerfile로 빌드 — 소스를 이미지에 굽고, 비-root로,
+    # 엔트리포인트가 alembic upgrade head 후 --reload 없이 uvicorn을 띄운다.
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # 접속정보·시크릿은 배포 플랫폼이 주입한다(커밋된 .env 아님).
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      # 허용할 프론트 출처(쉼표 구분 https 목록). 비어 있으면 localhost 폴백이라
+      # 프로덕션에서는 반드시 실제 도메인을 지정한다.
+      CORS_ORIGINS: ${CORS_ORIGINS}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:

@@ -29,6 +29,6 @@ class WordChainStateResponse(BaseModel):
     players: list[WordChainPlayerState]
     turn_user_id: int | None
     words: list[WordEntryOut]
-    winner_user_id: int | None
+    loser_user_id: int | None
     seconds_left: int | None
     last_event: str | None

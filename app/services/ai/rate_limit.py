@@ -26,10 +26,14 @@ class RateLimiter:
     async def check(self, user_id: int) -> None:
         r = get_redis()
         key = f"ai:ratelimit:{user_id}"
-        count = await r.incr(key)
-        if count == 1:
-            # 윈도우의 시작 — 이 키는 1시간 뒤 만료되며 카운터가 리셋된다.
-            await r.expire(key, self._window)
+        # INCR와 EXPIRE를 파이프라인으로 한 번에 보낸다. EXPIRE는 nx=True라
+        # "TTL이 없을 때만" 건다 — 첫 카운트에서 윈도우를 시작하되, 만약 이전에
+        # TTL이 유실된 키였다면 자가 치유된다. (예전 구현은 INCR 직후 프로세스가
+        # 죽으면 TTL 없는 키가 남아 유저가 영구 429에 걸릴 수 있었다.)
+        async with r.pipeline(transaction=True) as pipe:
+            pipe.incr(key)
+            pipe.expire(key, self._window, nx=True)
+            count, _ = await pipe.execute()
         if count > self._limit:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,

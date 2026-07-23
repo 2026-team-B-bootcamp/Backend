@@ -20,6 +20,11 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 발급된 JWT를 서버에서 일괄 무효화하기 위한 버전. 토큰에 이 값을 심어두고,
+    # 로그아웃 시 +1 하면 그 이전에 발급된 모든 토큰(ver 불일치)이 즉시 거부된다.
+    token_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -13,8 +13,10 @@ class SignupRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
+    # 로그인도 길이 상한을 둔다 — 없으면 수MB짜리 비밀번호로 argon2 해싱을
+    # 강제해 CPU를 소모시키는 DoS가 가능하다(가입은 이미 128자 제한).
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=1, max_length=128)
 
 
 # 로그인/회원가입 성공 시 클라이언트에게 내려주는 응답 형태.

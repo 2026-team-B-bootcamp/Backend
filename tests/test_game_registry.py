@@ -1,7 +1,10 @@
+"""채널당 게임 1종 제한을 폐기한 뒤의 정책 검증:
+서로 다른 게임 종류가 한 채널에서 동시에 열리고(공존), games/status로 각 상태가 집계된다.
+"""
+
 from httpx import AsyncClient
 
 from app.services.bingo.store import BingoGameStore, get_bingo_store
-from app.services.wheel.store import WheelStore, get_wheel_store
 from app.services.wordchain.store import WordChainStore, get_wordchain_store
 
 
@@ -26,7 +29,7 @@ async def _setup_channel(client: AsyncClient, register):
     return token_a, token_b, channels[0]["id"]
 
 
-async def test_second_game_kind_blocked_while_first_active(client: AsyncClient, register):
+async def test_different_games_coexist_in_channel(client: AsyncClient, register):
     from app.main import app
 
     app.dependency_overrides[get_bingo_store] = lambda: BingoGameStore()
@@ -34,44 +37,45 @@ async def test_second_game_kind_blocked_while_first_active(client: AsyncClient, 
 
     token_a, token_b, channel_id = await _setup_channel(client, register)
 
-    joined = await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(token_a))
-    assert joined.status_code == 200
+    # 빙고를 연 상태에서 끝말잇기도 열 수 있어야 한다(예전엔 409로 막혔음).
+    joined_bingo = await client.post(
+        f"/channels/{channel_id}/bingo/join", headers=_headers(token_a)
+    )
+    assert joined_bingo.status_code == 200
 
-    blocked = await client.post(
+    joined_wc = await client.post(
         f"/channels/{channel_id}/wordchain/join", headers=_headers(token_b)
     )
-    assert blocked.status_code == 409
-
-    # Same kind can keep joining — it's not a "different" game.
-    same_kind = await client.post(
-        f"/channels/{channel_id}/bingo/join", headers=_headers(token_b)
-    )
-    assert same_kind.status_code == 200
+    assert joined_wc.status_code == 200
 
     app.dependency_overrides.pop(get_bingo_store, None)
     app.dependency_overrides.pop(get_wordchain_store, None)
 
 
-async def test_lock_releases_after_wheel_reset(client: AsyncClient, register):
+async def test_games_status_aggregates(client: AsyncClient, register):
     from app.main import app
 
-    app.dependency_overrides[get_wheel_store] = lambda: WheelStore()
-    app.dependency_overrides[get_wordchain_store] = lambda: WordChainStore()
+    app.dependency_overrides[get_bingo_store] = lambda: BingoGameStore()
 
     token_a, token_b, channel_id = await _setup_channel(client, register)
 
-    await client.post(f"/channels/{channel_id}/wheel/join", headers=_headers(token_a))
-    blocked = await client.post(
-        f"/channels/{channel_id}/wordchain/join", headers=_headers(token_b)
-    )
-    assert blocked.status_code == 409
+    # 아무 게임도 없을 때는 전부 none
+    empty = await client.get(f"/channels/{channel_id}/games/status", headers=_headers(token_a))
+    assert empty.status_code == 200
+    assert empty.json()["bingo"] == "none"
 
-    await client.post(f"/channels/{channel_id}/wheel/reset", headers=_headers(token_a))
+    # 한 명 참여하면 대기, 2명 모여 시작하면 진행중으로 잡힌다
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(token_a))
+    waiting = (
+        await client.get(f"/channels/{channel_id}/games/status", headers=_headers(token_a))
+    ).json()
+    assert waiting["bingo"] == "waiting"
 
-    freed = await client.post(
-        f"/channels/{channel_id}/wordchain/join", headers=_headers(token_b)
-    )
-    assert freed.status_code == 200
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(token_b))
+    await client.post(f"/channels/{channel_id}/bingo/start", headers=_headers(token_a))
+    playing = (
+        await client.get(f"/channels/{channel_id}/games/status", headers=_headers(token_a))
+    ).json()
+    assert playing["bingo"] == "playing"
 
-    app.dependency_overrides.pop(get_wheel_store, None)
-    app.dependency_overrides.pop(get_wordchain_store, None)
+    app.dependency_overrides.pop(get_bingo_store, None)

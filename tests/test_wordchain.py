@@ -95,47 +95,49 @@ async def test_duplicate_word_rejected():
     assert exc.value.status_code == 422
 
 
-async def test_timeout_eliminates_and_finishes():
+async def test_timeout_bomb_explodes_on_holder():
     clock = FakeClock()
-    store = WordChainStore(turn_seconds=30, clock=clock)
+    store = WordChainStore(fuse_seconds=30, clock=clock)
     await store.join(1, 1, "Alice")
     await store.join(1, 2, "Bob")
     await store.start(1, 1)
-    await store.submit(1, 1, "사과")  # 이제 Bob 차례
+    await store.submit(1, 1, "사과")  # 폭탄이 Bob에게 넘어감 (도화선은 그대로)
 
-    clock.now += 31  # Bob 시간 초과
+    clock.now += 31  # 판 전체 단일 도화선 소진
     game, changed = await store.get(1)
     assert changed
     assert game.status == "finished"
-    assert game.winner_user_id == 1
+    assert game.loser_user_id == 2  # 폭탄 든 Bob이 단일 패자
     bob = game.find_player(2)
     assert bob is not None and not bob.alive
 
 
-async def test_timeout_passes_turn_with_three_players():
+async def test_timeout_ends_game_single_loser():
     clock = FakeClock()
-    store = WordChainStore(turn_seconds=30, clock=clock)
+    store = WordChainStore(fuse_seconds=30, clock=clock)
     await store.join(1, 1, "Alice")
     await store.join(1, 2, "Bob")
     await store.join(1, 3, "Carol")
     await store.start(1, 1)
-    await store.submit(1, 1, "사과")  # Bob 차례
+    await store.submit(1, 1, "사과")  # 폭탄 → Bob
 
-    clock.now += 31  # Bob 탈락 → Carol 차례, 게임은 계속
+    clock.now += 31  # 도화선 소진: 턴을 넘기지 않고 즉시 종료, 든 사람만 패배
     game, changed = await store.get(1)
     assert changed
-    assert game.status == "playing"
-    assert game.current_player().user_id == 3
-    assert not game.find_player(2).alive
+    assert game.status == "finished"
+    assert game.loser_user_id == 2
+    # 나머지는 살아있다 (누적 탈락 없음)
+    assert game.find_player(1).alive
+    assert game.find_player(3).alive
 
 
 async def test_join_after_finish_opens_new_round():
     clock = FakeClock()
-    store = WordChainStore(turn_seconds=30, clock=clock)
+    store = WordChainStore(fuse_seconds=30, clock=clock)
     await store.join(1, 1, "Alice")
     await store.join(1, 2, "Bob")
     await store.start(1, 1)
-    clock.now += 31  # Alice(첫 차례) 시간 초과 → Bob 승리
+    clock.now += 31  # 도화선 소진 → 첫 폭탄 보유자 Alice 패배
     game, _ = await store.get(1)
     assert game.status == "finished"
 

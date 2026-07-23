@@ -16,6 +16,7 @@ from app.models.channel import Channel
 from app.models.user import User
 from app.services import server_service
 from app.services.realtime import hub
+from app.services.ws_rate_limit import allow
 
 router = APIRouter()
 
@@ -40,6 +41,10 @@ async def channel_ws(
     if user is None or channel is None:
         await websocket.close(code=4401)
         return
+    # 서버측 무효화: 로그아웃 등으로 버전이 올라간 토큰이면 WS 접속도 거부한다.
+    if int(payload.get("ver", 0)) != user.token_version:
+        await websocket.close(code=4401)
+        return
     # 이 채널이 속한 서버의 멤버가 아니면 접속을 거부한다 (권한 검사).
     if not await server_service.is_member(db, channel.server_id, user.id):
         await websocket.close(code=4403)
@@ -48,10 +53,13 @@ async def channel_ws(
     await db.close()
 
     await websocket.accept()
-    # 이 채널의 구독자 목록에 등록하고, "누가 접속 중인지"를 모두에게 알린다.
-    await hub.subscribe(channel_id, websocket, user.id, user.display_name)
-    await hub.broadcast_presence(channel_id)
+    # subscribe/첫 presence 방송을 try 안에 둔다 — 이 단계에서 Redis가 순단해
+    # 예외가 나도 finally의 unsubscribe가 반드시 실행돼 소켓이 hub에 남지 않게 한다
+    # (예전엔 이 두 줄이 try 밖에 있어 여기서 실패하면 소켓이 누수됐다).
     try:
+        # 이 채널의 구독자 목록에 등록하고, "누가 접속 중인지"를 모두에게 알린다.
+        await hub.subscribe(channel_id, websocket, user.id, user.display_name)
+        await hub.broadcast_presence(channel_id)
         while True:
             try:
                 data = await websocket.receive_json()
@@ -59,6 +67,10 @@ async def channel_ws(
                 continue
             # 클라이언트가 "타이핑 중" 신호를 보내면 같은 채널의 다른 사람들에게 전달한다.
             if data.get("type") == "typing":
+                # 타이핑 프레임은 채널 전원에게 퍼지므로 폭주를 막는다(2초에 5회).
+                # 한도를 넘으면 소켓을 끊지 않고 이번 브로드캐스트만 조용히 건너뛴다.
+                if not await allow(f"flood:typing:{channel_id}:{user.id}", 5, 2):
+                    continue
                 await hub.broadcast(
                     channel_id,
                     {

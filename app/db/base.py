@@ -15,7 +15,16 @@ class Base(DeclarativeBase):
 
 
 # DB와의 실제 연결을 관리하는 비동기 엔진(앱 전체에서 하나만 생성해 공유).
-engine = create_async_engine(settings.async_database_url, echo=False, future=True)
+# pool_pre_ping: 풀에서 커넥션을 꺼낼 때마다 가벼운 ping으로 살아있는지 확인한다.
+#   관리형 DB나 방화벽이 유휴 커넥션을 조용히 끊어도 첫 쿼리가 깨지지 않는다.
+# pool_recycle: 커넥션을 30분마다 재생성해 서버측 idle timeout보다 먼저 교체한다.
+engine = create_async_engine(
+    settings.async_database_url,
+    echo=False,
+    future=True,
+    pool_pre_ping=True,
+    pool_recycle=1800,
+)
 
 # 요청마다 이 팩토리로 새 세션을 만들어 쓴다(core/deps.py의 get_db 참고).
 async_session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
