@@ -1,4 +1,4 @@
-"""Gemini API를 실제로 호출하는 IcebreakerProvider 구현체.
+"""Gemini API를 실제로 호출하는 IcebreakerProvider / TagInsightProvider 구현체.
 
 프롬프트로 태그 목록을 주고 "{이름}" 플레이스홀더가 든 질문 템플릿 여러 개를
 JSON 배열로 한 번에 받아온다 (LLM 1회 호출로 배치 생성).
@@ -15,8 +15,11 @@ from google import genai
 from google.genai import types
 
 from app.core.config import settings
-from app.services.ai.base import IcebreakerProvider
-from app.services.ai.stub_provider import TemplateIcebreakerProvider
+from app.services.ai.base import IcebreakerProvider, TagInsight, TagInsightProvider
+from app.services.ai.stub_provider import (
+    TemplateIcebreakerProvider,
+    TemplateTagInsightProvider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,3 +110,86 @@ class GeminiIcebreakerProvider(IcebreakerProvider):
             )
             results.extend(fill)
         return results
+
+
+# 통계 요약은 짧은 JSON 한 덩어리라 질문 배치 생성보다 빨리 끝난다.
+_INSIGHT_TIMEOUT_SECONDS = 6.0
+
+_INSIGHT_PROMPT = """당신은 온라인 모임의 분위기를 한눈에 알려주는 안내자입니다.
+
+이 모임 멤버들이 등록한 관심사 태그와 등록 인원수:
+{stats}
+
+관심사를 등록한 사람: {member_count}명
+
+할 일 두 가지를 JSON 객체 하나로 출력하세요.
+
+1) "summary": 이 모임이 어떤 사람들이 모인 곳인지 한국어 1~2문장(전체 80자 이내)으로 요약.
+   - 태그를 그대로 나열하지 말고, 어떤 이야기가 오갈 법한 모임인지 사람 말로 쓰세요.
+   - 처음 들어온 사람에게 건네는 편안한 말투로 쓰세요.
+2) "suggestions": 새로 들어온 사람이 자기 관심사로 골라 쓰기 좋은 태그 {suggest_count}개(한국어).
+   - 위 태그 분포와 결이 맞아 대화가 붙을 만한 것을 고르세요.
+   - 이미 있는 태그를 그대로 반복해도 되고, 같은 결의 다른 관심사를 새로 제안해도 됩니다.
+   - 각 태그는 공백 없는 1~10자 단어로 쓰세요.
+
+다른 설명 없이 JSON 객체로만 출력하세요.
+예: {{"summary": "...", "suggestions": ["...", "..."]}}"""
+
+
+class GeminiTagInsightProvider(TagInsightProvider):
+    """서버 관심사 통계를 Gemini로 요약하는 구현체.
+
+    호출 실패(타임아웃·파싱 실패·빈 응답)는 모달을 깨뜨리지 않도록 통계 기반
+    stub 요약으로 폴백한다. 결과는 tag_stats.py가 태그 분포 지문(fingerprint)을
+    키로 Redis에 캐시하므로(cacheable=True), 분포가 그대로면 다시 부르지 않는다.
+    """
+
+    cacheable = True
+
+    def __init__(self, client: genai.Client | None = None) -> None:
+        self._client = client or genai.Client(api_key=settings.gemini_api_key)
+        self._fallback = TemplateTagInsightProvider()
+
+    async def summarize(
+        self, tag_counts: list[tuple[str, int]], member_count: int, suggest_count: int
+    ) -> TagInsight:
+        if not tag_counts:
+            # 통계가 없으면 LLM에 물어볼 것도 없다 — 안내 문구를 그대로 쓴다.
+            return await self._fallback.summarize(tag_counts, member_count, suggest_count)
+
+        stats = "\n".join(f"- {tag}: {count}명" for tag, count in tag_counts)
+        prompt = _INSIGHT_PROMPT.format(
+            stats=stats, member_count=member_count, suggest_count=suggest_count
+        )
+        try:
+            response = await asyncio.wait_for(
+                self._client.aio.models.generate_content(
+                    model=settings.gemini_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+                        max_output_tokens=400,
+                        response_mime_type="application/json",
+                    ),
+                ),
+                timeout=_INSIGHT_TIMEOUT_SECONDS,
+            )
+            parsed = json.loads((response.text or "").strip())
+            if not isinstance(parsed, dict):
+                raise ValueError(f"JSON 객체가 아님: {type(parsed).__name__}")
+            summary = str(parsed.get("summary", "")).strip()
+            raw_suggestions = parsed.get("suggestions")
+            suggestions: list[str] = []
+            if isinstance(raw_suggestions, list):
+                for item in raw_suggestions:
+                    tag = str(item).strip()
+                    # 태그 컬럼이 30자 제한이라 그대로 입력칸에 넣을 수 있는 것만 남긴다.
+                    if tag and len(tag) <= 30 and tag not in suggestions:
+                        suggestions.append(tag)
+            if summary and suggestions:
+                return TagInsight(summary=summary, suggestions=suggestions[:suggest_count])
+            logger.warning("Gemini 관심사 요약이 불완전 — stub으로 폴백")
+        except Exception:
+            logger.exception("Gemini 관심사 요약 실패 — stub으로 폴백")
+
+        return await self._fallback.summarize(tag_counts, member_count, suggest_count)

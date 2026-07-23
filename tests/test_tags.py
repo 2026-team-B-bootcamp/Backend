@@ -235,3 +235,73 @@ async def test_non_member_cannot_set_tags_403(client: AsyncClient, register):
         headers=_headers(token_b),
     )
     assert resp.status_code == 403
+
+
+async def test_tag_stats_aggregates_and_suggests(client: AsyncClient, register, monkeypatch):
+    """태그 통계: 사람 수 기준 집계 + 요약/추천이 함께 온다."""
+    _install_fake_provider(monkeypatch)
+    owner = await register(client, "a@test.com", "pass1234", "Alice")
+    server = await _create_server(client, owner)
+    invite = server["invite_code"]
+
+    bob = await register(client, "b@test.com", "pass1234", "Bob")
+    await client.post("/servers/join", json={"invite_code": invite}, headers=_headers(bob))
+
+    await client.put(
+        f"/servers/{server['id']}/tags",
+        json={"tag1": "포켓몬", "tag2": "영화", "tag3": "커피"},
+        headers=_headers(owner),
+    )
+    await client.put(
+        f"/servers/{server['id']}/tags",
+        json={"tag1": "포켓몬", "tag2": "요리", "tag3": "게임"},
+        headers=_headers(bob),
+    )
+
+    resp = await client.get(f"/servers/{server['id']}/tags/stats", headers=_headers(bob))
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["total_members"] == 2
+    assert body["tagged_members"] == 2
+    # 두 명이 함께 쓴 "포켓몬"이 1위, 나머지는 1명씩
+    assert body["top_tags"][0] == {"tag": "포켓몬", "count": 2}
+    assert {row["tag"] for row in body["top_tags"]} == {
+        "포켓몬",
+        "영화",
+        "커피",
+        "요리",
+        "게임",
+    }
+    # 내 태그는 모달 입력칸 초기값으로 쓰인다
+    assert body["my_tags"] == ["포켓몬", "요리", "게임"]
+    assert body["summary"]
+    assert len(body["suggestions"]) > 0
+
+
+async def test_tag_stats_requires_membership(client: AsyncClient, register):
+    """멤버가 아니면 다른 서버의 관심사 통계를 볼 수 없다."""
+    owner = await register(client, "a@test.com", "pass1234", "Alice")
+    server = await _create_server(client, owner)
+    outsider = await register(client, "c@test.com", "pass1234", "Carol")
+
+    resp = await client.get(
+        f"/servers/{server['id']}/tags/stats", headers=_headers(outsider)
+    )
+    assert resp.status_code == 403
+
+
+async def test_tag_stats_empty_server(client: AsyncClient, register):
+    """아무도 태그를 등록하지 않은 서버에서도 안내 문구가 나온다."""
+    owner = await register(client, "a@test.com", "pass1234", "Alice")
+    server = await _create_server(client, owner)
+
+    body = (
+        await client.get(f"/servers/{server['id']}/tags/stats", headers=_headers(owner))
+    ).json()
+    assert body["top_tags"] == []
+    assert body["tagged_members"] == 0
+    assert body["total_members"] == 1
+    assert body["my_tags"] == []
+    # 통계가 없어도 추천은 폴백 후보로 채워져 모달이 허전하지 않다
+    assert len(body["suggestions"]) > 0

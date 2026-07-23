@@ -14,3 +14,23 @@ class TagUpsertRequest(BaseModel):
 
 class TagResponse(BaseModel):
     tags: list[str]
+
+
+class TagStatEntry(BaseModel):
+    tag: str
+    # 이 태그를 등록한 서버 멤버 수.
+    count: int
+
+
+class TagStatsResponse(BaseModel):
+    """태그 설정 모달이 쓰는 "이 모임의 관심사 지형도"."""
+
+    total_members: int
+    # 태그를 하나라도 등록한 멤버 수 — total_members와 함께 "몇 명이 채웠는지"를 보여준다.
+    tagged_members: int
+    top_tags: list[TagStatEntry]
+    # AI가 만든 한줄 요약과 추천 태그 (Redis 캐시를 거친다).
+    summary: str
+    suggestions: list[str]
+    # 내가 이 서버에 이미 등록해둔 태그 — 모달 입력칸 초기값으로 쓴다(없으면 빈 목록).
+    my_tags: list[str]
