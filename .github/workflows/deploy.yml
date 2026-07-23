@@ -72,6 +72,10 @@ jobs:
     # "롤백이거나 빌드 성공" 일 때만 진행하도록 직접 판정한다.
     if: ${{ always() && (inputs.image_tag || needs.build.result == 'success') }}
     runs-on: ubuntu-latest
+    # EC2가 GHCR에서 이미지를 당겨오려면 이 실행의 GITHUB_TOKEN에 패키지 읽기 권한이 있어야 한다.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - name: 배포할 이미지 태그 결정
         id: tag
@@ -85,7 +89,10 @@ jobs:
         env:
           IMAGE_TAG: ${{ steps.tag.outputs.value }}
           GHCR_USER: ${{ github.actor }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          # GHCR_TOKEN 시크릿이 없으면 이 실행의 GITHUB_TOKEN으로 대신 로그인한다.
+          # 실행이 끝나면 만료되는 토큰이라 EC2에 장기 자격증명을 두지 않아도 되고,
+          # 패키지를 private으로 유지한 채 pull만 허용할 수 있다.
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
@@ -107,9 +114,10 @@ jobs:
               echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
             fi
 
-            # GHCR 패키지를 public으로 두면 인증 없이 pull 된다 — 그 경우
-            # GHCR_TOKEN 시크릿을 만들 필요가 없다(관리·회전할 자격증명이 하나 줄어든다).
-            # 패키지가 private이면 read:packages PAT를 GHCR_TOKEN에 넣어야 한다.
+            # GHCR_TOKEN은 워크플로가 채워 넣는다: GHCR_TOKEN 시크릿이 있으면 그것,
+            # 없으면 이 실행의 GITHUB_TOKEN(만료되는 임시 토큰)이다. 어느 쪽이든 로그인해서
+            # private 패키지를 pull 할 수 있으므로 패키지를 public으로 열 필요가 없다.
+            # (둘 다 비어 있는 경우엔 익명 pull을 시도한다 — 패키지가 public이어야 성공한다.)
             if [ -n "${GHCR_TOKEN}" ]; then
               echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
             else
