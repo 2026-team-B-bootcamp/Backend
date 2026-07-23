@@ -176,3 +176,46 @@ async def test_message_carries_avatar_url(client: AsyncClient, register):
     assert "avatar_url" in sent
     assert sent["avatar_url"] is None
     assert sent["kind"] == "user"
+
+
+async def test_welcome_skipped_without_tags(client: AsyncClient, register):
+    """태그 등록 전에는 카드를 만들지 않는다.
+
+    자기소개의 알맹이가 태그다. 태그 없이 먼저 띄우면 맹탕 카드가 "채널당 1회"를
+    소진해버려, 정작 태그를 등록한 뒤에는 카드가 안 나온다.
+    """
+    tokens, channel_id, _ = await _setup(client, register)
+
+    before = await client.post(
+        f"/channels/{channel_id}/messages/welcome", headers=_headers(tokens[0])
+    )
+    assert before.status_code == 200
+    assert before.json() is None
+    # 카드를 안 만들었으니 채널은 여전히 비어 있어야 한다
+    listed = (
+        await client.get(f"/channels/{channel_id}/messages", headers=_headers(tokens[0]))
+    ).json()
+    assert listed == []
+
+
+async def test_welcome_created_after_tags_registered(client: AsyncClient, register):
+    """태그를 등록한 뒤 다시 부르면 그 태그를 반영한 카드가 만들어진다."""
+    tokens, channel_id, server_id = await _setup(client, register)
+
+    # 태그 없이 한 번 호출 — 아무 일도 일어나지 않는다
+    await client.post(f"/channels/{channel_id}/messages/welcome", headers=_headers(tokens[0]))
+
+    await client.put(
+        f"/servers/{server_id}/tags",
+        json={"tag1": "캠핑", "tag2": "재즈", "tag3": "커피"},
+        headers=_headers(tokens[0]),
+    )
+    after = await client.post(
+        f"/channels/{channel_id}/messages/welcome", headers=_headers(tokens[0])
+    )
+    card = after.json()
+    assert card is not None
+    assert card["kind"] == "welcome"
+    # 등록한 태그가 문구에 반영되고, 카드에도 태그가 실려 온다
+    assert any(tag in card["content"] for tag in ("캠핑", "재즈", "커피"))
+    assert card["tags"] == ["캠핑", "재즈", "커피"]

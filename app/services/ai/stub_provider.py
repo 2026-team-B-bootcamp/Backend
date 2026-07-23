@@ -93,24 +93,40 @@ class TemplateTagInsightProvider(TagInsightProvider):
         return TagInsight(summary=summary, suggestions=picked[:suggest_count])
 
 
+# 등장 소개의 첫 문장 — 매번 같은 문장이면 재미가 없으니 몇 가지를 돌려 쓴다.
+_ENTRANCE_LINES = [
+    "🎉 {이름}님, 등장!",
+    "✨ {이름}님이 문을 열고 들어왔습니다.",
+    "🚪 {이름}님 입장!",
+    "👋 {이름}님이 이 채널에 합류했어요.",
+]
+
+
 class TemplateWelcomeProvider(WelcomeProvider):
-    """LLM 없이 관심사를 문장에 끼워 넣는 폴백 환영 문구 제공자."""
+    """LLM 없이 관심사를 문장에 끼워 넣는 폴백 환영 문구 제공자.
+
+    Gemini 키가 없거나 호출이 실패했을 때 쓰인다. 문구가 매번 똑같지 않도록
+    첫 문장은 몇 가지 중에서 고른다.
+    """
 
     cacheable = False
 
     async def generate(self, my_tags: list[str], server_tags: list[str]) -> str:
         mine = [t for t in my_tags if t and t.strip()]
+        opener = random.choice(_ENTRANCE_LINES)
         if not mine:
-            return (
-                "{이름}님이 채널에 들어왔어요. 반갑습니다! "
-                "관심사를 등록하면 통하는 사람을 더 쉽게 찾을 수 있어요."
-            )
+            # 라우터가 태그 없을 땐 카드를 안 만들지만, 폴백 경로는 열어둔다.
+            return f"{opener} 반갑습니다 — 관심사를 등록하면 통하는 사람을 찾기 쉬워져요."
+
         joined = " · ".join(mine)
         # 모임에 이미 있는 관심사와 겹치면 그걸 짚어준다 — 말 붙일 실마리가 된다.
         shared = [t for t in mine if t in set(server_tags)]
         if shared:
             return (
-                f"{{이름}}님이 들어왔어요. {joined}에 관심이 있대요 — "
-                f"'{shared[0]}' 좋아하는 분들 반가우시겠네요!"
+                f"{opener} {joined} 담당이라고 합니다. "
+                f"'{shared[0]}' 좋아하는 분들, 드디어 얘기 통할 사람이 왔어요!"
             )
-        return f"{{이름}}님이 들어왔어요. {joined}에 관심이 있대요. 먼저 말 걸어보세요!"
+        return (
+            f"{opener} {joined} 담당이라고 합니다. "
+            "이 모임엔 아직 없던 관심사네요 — 먼저 말 걸어보세요!"
+        )
