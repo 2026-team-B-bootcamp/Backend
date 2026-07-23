@@ -3,7 +3,8 @@
 요청 흐름: 클라이언트 → 이 라우터 → game_registry(채널 게임 잠금) → balance store
 → 상태 직렬화 응답 + realtime hub로 브로드캐스트.
 제한시간이 끝나면(finished) 조회 시 registry 잠금을 느슨하게 해제해(idempotent) 다른 게임이
-열릴 수 있게 한다. 개인별 투표(my_vote)는 브로드캐스트엔 싣지 않고, 각 클라이언트가 자기 값을 유지한다.
+열릴 수 있게 한다. 개인별 투표(my_vote)는 브로드캐스트엔 싣지 않고,
+각 클라이언트가 자기 값을 유지한다.
 """
 
 import time
@@ -15,6 +16,8 @@ from app.core.deps import get_current_user, get_db
 from app.models.user import User
 from app.schemas.balance import (
     BalanceComment as BalanceCommentSchema,
+)
+from app.schemas.balance import (
     BalanceStateResponse,
     CommentBalanceRequest,
     StartBalanceRequest,

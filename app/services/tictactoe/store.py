@@ -6,7 +6,6 @@
 """
 
 import json
-import time
 from dataclasses import asdict, dataclass, field
 
 from fastapi import HTTPException, status

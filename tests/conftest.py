@@ -9,12 +9,17 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-import app.core.redis as app_redis
-import app.models  # noqa: F401  (register models on Base.metadata)
-import app.services.ai.embedding as ai_embedding
-from app.core.deps import get_db
-from app.db.base import Base
-from app.main import app
+# config.py가 약한 JWT_SECRET(빈 값/기본값/32자 미만)을 기동 시 거부하므로, app을
+# import하기 전에 테스트용 시크릿을 주입한다. CI엔 .env가 없어 이 처리가 없으면
+# 전 테스트가 import 단계에서 실패한다. 프로덕션의 fail-hard 검증 자체는 그대로 둔다.
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-for-ci-not-for-production-0000")
+
+import app.core.redis as app_redis  # noqa: E402
+import app.models  # noqa: E402, F401  (register models on Base.metadata)
+import app.services.ai.embedding as ai_embedding  # noqa: E402
+from app.core.deps import get_db  # noqa: E402
+from app.db.base import Base  # noqa: E402
+from app.main import app  # noqa: E402
 
 # 테스트는 실제 Postgres(pgvector)를 쓴다 — tag_embeddings의 vector 타입과
 # 코사인 연산(<=>)은 SQLite로 흉내낼 수 없기 때문. 로컬에선 docker compose의

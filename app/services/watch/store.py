@@ -65,7 +65,9 @@ class WatchStore:
         return f"watch:{channel_id}"
 
     async def _save(self, party: WatchParty) -> None:
-        await get_redis().set(self._key(party.channel_id), json.dumps(asdict(party)), ex=int(self._ttl))
+        await get_redis().set(
+            self._key(party.channel_id), json.dumps(asdict(party)), ex=int(self._ttl)
+        )
 
     async def get(self, channel_id: int) -> WatchParty | None:
         raw = await get_redis().get(self._key(channel_id))
