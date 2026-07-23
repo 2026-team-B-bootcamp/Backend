@@ -73,8 +73,13 @@ class ChannelHub:
         # 같은 유저의 다중 접속(탭 여러 개)은 한 명으로 합친다.
         seen: dict[int, str] = {}
         for raw in entries:
-            data = json.loads(raw)
-            seen.setdefault(data["user_id"], data["display_name"])
+            # 손상됐거나 형식이 다른 항목 하나 때문에 접속자 목록 전체가 깨지지 않도록
+            # 방어적으로 파싱한다(깨진 항목은 조용히 건너뛴다).
+            try:
+                data = json.loads(raw)
+                seen.setdefault(int(data["user_id"]), str(data["display_name"]))
+            except (ValueError, TypeError, KeyError):
+                logger.warning("presence 항목 파싱 실패 — 건너뜀: %r", raw)
         return [{"user_id": uid, "display_name": name} for uid, name in seen.items()]
 
     async def broadcast(self, channel_id: int, event: dict) -> None:
@@ -101,17 +106,30 @@ class ChannelHub:
             await self.unsubscribe(channel_id, ws)
 
     async def listen(self) -> None:
-        """Redis 구독 루프. 앱 시작 시(lifespan) 워커당 하나 백그라운드로 띄운다."""
-        pubsub = get_redis().pubsub()
-        await pubsub.psubscribe(_TOPIC.format(channel_id="*"))
-        async for message in pubsub.listen():
-            if message["type"] != "pmessage":
-                continue  # 구독 확인 등 제어 메시지는 무시
+        """Redis 구독 루프. 앱 시작 시(lifespan) 워커당 하나 백그라운드로 띄운다.
+
+        redis-py asyncio의 PubSub.listen()은 연결이 끊기면 예외를 던지고 자동
+        재연결하지 않는다. 그대로 두면 Redis가 한 번만 깜빡여도 이 태스크가 죽어
+        REST는 멀쩡한데 실시간(채팅·presence·게임)만 조용히 멈춘다. 따라서
+        구독 자체를 바깥 루프로 감싸 끊기면 다시 psubscribe 하도록 감시한다.
+        """
+        while True:
             try:
-                channel_id = int(message["channel"].split(":", 1)[1])
-                await self._deliver(channel_id, json.loads(message["data"]))
+                pubsub = get_redis().pubsub()
+                await pubsub.psubscribe(_TOPIC.format(channel_id="*"))
+                async for message in pubsub.listen():
+                    if message["type"] != "pmessage":
+                        continue  # 구독 확인 등 제어 메시지는 무시
+                    try:
+                        channel_id = int(message["channel"].split(":", 1)[1])
+                        await self._deliver(channel_id, json.loads(message["data"]))
+                    except Exception:
+                        logger.exception("pub/sub 메시지 처리 실패: %r", message)
+            except asyncio.CancelledError:
+                raise  # 앱 종료(lifespan)에 따른 정상 취소는 그대로 전파
             except Exception:
-                logger.exception("pub/sub 메시지 처리 실패: %r", message)
+                logger.exception("pub/sub 연결 끊김 — 1초 후 재구독")
+                await asyncio.sleep(1)
 
 
 hub = ChannelHub()

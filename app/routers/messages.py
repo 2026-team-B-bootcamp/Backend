@@ -6,7 +6,9 @@ realtime.hub(WebSocket 브로드캐스트). 메시지를 보내면 먼저 DB에 
 "저장 후 브로드캐스트" 패턴이 이 서비스의 실시간 채팅 핵심 로직이다.
 """
 
-from fastapi import APIRouter, Depends
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db
@@ -14,6 +16,9 @@ from app.models.user import User
 from app.schemas.message import MessageCreate, MessageOut
 from app.services import message_service, server_service, tag_service
 from app.services.realtime import hub
+from app.services.ws_rate_limit import allow
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/channels", tags=["messages"])
 
@@ -27,6 +32,12 @@ async def send_message(
 ) -> MessageOut:
     # 1) 이 채널이 속한 서버의 멤버인지 확인 (권한 검사).
     channel = await server_service.require_channel_access(db, channel_id, current_user.id)
+    # 메시지는 채널 전원에게 브로드캐스트되므로 도배(fan-out 증폭)를 막는다(5초에 10건).
+    if not await allow(f"flood:msg:{channel_id}:{current_user.id}", 10, 5):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="메시지를 너무 빨리 보내고 있어요. 잠시 후 다시 시도해주세요",
+        )
     # 2) 메시지를 먼저 DB에 저장한다.
     message, display_name = await message_service.create_message(
         db, channel_id, current_user.id, payload.content
@@ -43,9 +54,15 @@ async def send_message(
     )
     # 3) 저장이 끝난 메시지를 같은 채널을 구독 중인 모든 WebSocket 연결에
     #    실시간으로 broadcast 한다 (DB 저장 -> 실시간 전파 순서가 핵심).
-    await hub.broadcast(
-        channel_id, {"type": "message.new", "payload": out.model_dump(mode="json")}
-    )
+    #    메시지는 이미 DB에 커밋됐으므로, 여기서 Redis가 순단해 broadcast가
+    #    실패해도 500을 내면 안 된다 — 클라가 실패로 알고 재전송하면 중복이 된다.
+    #    실패는 로깅만 하고 정상 응답한다(수신자는 재연결 시 after_id로 보충받는다).
+    try:
+        await hub.broadcast(
+            channel_id, {"type": "message.new", "payload": out.model_dump(mode="json")}
+        )
+    except Exception:
+        logger.exception("메시지 broadcast 실패(저장은 완료됨) channel_id=%s", channel_id)
     return out
 
 
