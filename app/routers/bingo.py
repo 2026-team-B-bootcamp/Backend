@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db
 from app.models.user import User
-from app.schemas.bingo import BingoStateResponse, ClickRequest, PlayerState
+from app.schemas.bingo import BingoStateResponse, CallEntry, ClickRequest, PlayerState
 from app.services import server_service
 from app.services.bingo.logic import count_completed_lines
 from app.services.bingo.store import BingoGame, BingoGameStore, get_bingo_store
@@ -38,6 +38,11 @@ def _serialize(game: BingoGame, requester_id: int) -> BingoStateResponse:
         players=players,
         winner_user_id=game.winner_user_id,
         round=game.round,
+        turn_user_id=game.current_turn_user_id(),
+        call_log=[
+            CallEntry(number=c.number, user_id=c.user_id, display_name=c.display_name)
+            for c in game.call_log
+        ],
     )
 
 

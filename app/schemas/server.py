@@ -24,5 +24,7 @@ class ServerResponse(BaseModel):
 class MemberResponse(BaseModel):
     user_id: int
     display_name: str
+    # 프로필 사진. 없으면 프런트가 이름 첫 글자 아바타로 대체한다.
+    avatar_url: str | None = None
     tags: list[str]
     common_with_me: list[str]

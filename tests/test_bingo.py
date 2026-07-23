@@ -44,6 +44,22 @@ async def _setup_channel(client: AsyncClient, register, members: int):
     return tokens, channels[0]["id"]
 
 
+async def _call_in_turns(
+    client: AsyncClient, channel_id: int, tokens: list[str], numbers: range | list[int]
+) -> dict:
+    """턴제라 참가 순서대로 돌아가며 호출해야 한다 — 마지막 응답을 돌려준다."""
+    last: dict = {}
+    for i, number in enumerate(numbers):
+        resp = await client.post(
+            f"/channels/{channel_id}/bingo/click",
+            json={"number": number},
+            headers=_headers(tokens[i % len(tokens)]),
+        )
+        assert resp.status_code == 200, resp.text
+        last = resp.json()
+    return last
+
+
 async def test_multiple_members_join_same_game(client: AsyncClient, register, fresh_store):
     tokens, channel_id = await _setup_channel(client, register, 3)
 
@@ -112,15 +128,7 @@ async def test_winner_on_three_lines(client: AsyncClient, register, fresh_store,
     await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[1]))
     await client.post(f"/channels/{channel_id}/bingo/start", headers=_headers(tokens[0]))
 
-    last = None
-    for number in range(1, 16):
-        last = (
-            await client.post(
-                f"/channels/{channel_id}/bingo/click",
-                json={"number": number},
-                headers=_headers(tokens[0]),
-            )
-        ).json()
+    last = await _call_in_turns(client, channel_id, tokens, range(1, 16))
     assert last["winner_user_id"] is not None
     winner = next(p for p in last["players"] if p["user_id"] == last["winner_user_id"])
     assert winner["completed_lines"] >= 3
@@ -172,12 +180,7 @@ async def test_rejoin_after_win_resets_round(
     await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[0]))
     await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[1]))
     await client.post(f"/channels/{channel_id}/bingo/start", headers=_headers(tokens[0]))
-    for number in range(1, 16):
-        await client.post(
-            f"/channels/{channel_id}/bingo/click",
-            json={"number": number},
-            headers=_headers(tokens[0]),
-        )
+    await _call_in_turns(client, channel_id, tokens, range(1, 16))
 
     reset = (
         await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[0]))
@@ -188,3 +191,93 @@ async def test_rejoin_after_win_resets_round(
     # Only the rejoining player is present in the fresh round.
     assert [p["user_id"] for p in reset["players"]] == [reset["players"][0]["user_id"]]
     assert sorted(reset["my_board"]) == list(range(1, 26))
+
+
+async def test_click_out_of_turn_rejected(client: AsyncClient, register, fresh_store):
+    """턴제 — 자기 차례가 아니면 숫자를 부를 수 없다."""
+    tokens, channel_id = await _setup_channel(client, register, 2)
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[0]))
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[1]))
+    started = (
+        await client.post(f"/channels/{channel_id}/bingo/start", headers=_headers(tokens[0]))
+    ).json()
+
+    # 먼저 참가한 Alice부터 시작한다
+    alice_id = started["players"][0]["user_id"]
+    assert started["turn_user_id"] == alice_id
+
+    # Bob이 먼저 누르면 거절
+    early = await client.post(
+        f"/channels/{channel_id}/bingo/click", json={"number": 7}, headers=_headers(tokens[1])
+    )
+    assert early.status_code == 409
+    assert "차례" in early.json()["detail"]
+
+    # Alice가 부르면 성공하고 차례가 Bob에게 넘어간다
+    after = (
+        await client.post(
+            f"/channels/{channel_id}/bingo/click",
+            json={"number": 7},
+            headers=_headers(tokens[0]),
+        )
+    ).json()
+    assert after["turn_user_id"] != alice_id
+
+    # 이제 Alice가 연달아 부르면 거절
+    again = await client.post(
+        f"/channels/{channel_id}/bingo/click", json={"number": 8}, headers=_headers(tokens[0])
+    )
+    assert again.status_code == 409
+
+
+async def test_duplicate_number_rejected(client: AsyncClient, register, fresh_store):
+    """이미 호출된 숫자는 다시 부를 수 없다 (차례만 헛되이 넘어가는 것을 막는다)."""
+    tokens, channel_id = await _setup_channel(client, register, 2)
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[0]))
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[1]))
+    await client.post(f"/channels/{channel_id}/bingo/start", headers=_headers(tokens[0]))
+
+    await client.post(
+        f"/channels/{channel_id}/bingo/click", json={"number": 7}, headers=_headers(tokens[0])
+    )
+    dup = await client.post(
+        f"/channels/{channel_id}/bingo/click", json={"number": 7}, headers=_headers(tokens[1])
+    )
+    assert dup.status_code == 409
+    assert "이미 호출" in dup.json()["detail"]
+
+
+async def test_call_log_records_order_and_caller(client: AsyncClient, register, fresh_store):
+    """호출 기록이 순서대로, 누가 불렀는지와 함께 남는다."""
+    tokens, channel_id = await _setup_channel(client, register, 2)
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[0]))
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[1]))
+    await client.post(f"/channels/{channel_id}/bingo/start", headers=_headers(tokens[0]))
+
+    last = await _call_in_turns(client, channel_id, tokens, [11, 3, 25])
+
+    assert [c["number"] for c in last["call_log"]] == [11, 3, 25]
+    assert [c["display_name"] for c in last["call_log"]] == ["Alice", "Bob", "Alice"]
+    # called_numbers는 정렬된 집합이라 순서 정보가 없다 — 그래서 call_log가 따로 필요하다
+    assert last["called_numbers"] == [3, 11, 25]
+
+
+async def test_a_call_marks_every_players_board(
+    client: AsyncClient, register, fresh_store, monkeypatch
+):
+    """한 사람이 부른 숫자가 모든 참가자의 보드에 반영된다."""
+    monkeypatch.setattr(store_module, "generate_board", lambda: list(range(1, 26)))
+    tokens, channel_id = await _setup_channel(client, register, 2)
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[0]))
+    await client.post(f"/channels/{channel_id}/bingo/join", headers=_headers(tokens[1]))
+    await client.post(f"/channels/{channel_id}/bingo/start", headers=_headers(tokens[0]))
+
+    # Alice가 한 줄(1~5)을 완성할 수 있도록 번갈아 부른다
+    await _call_in_turns(client, channel_id, tokens, [1, 2, 3, 4, 5])
+
+    # Bob이 조회해도 같은 숫자들이 호출된 것으로 보이고, 보드가 같으니 줄 수도 같다
+    bob_view = (
+        await client.get(f"/channels/{channel_id}/bingo", headers=_headers(tokens[1]))
+    ).json()
+    assert bob_view["called_numbers"] == [1, 2, 3, 4, 5]
+    assert all(p["completed_lines"] == 1 for p in bob_view["players"])

@@ -15,6 +15,14 @@ class PlayerState(BaseModel):
     completed_lines: int
 
 
+class CallEntry(BaseModel):
+    """호출 기록 한 줄 — 몇 번째로 누가 어떤 숫자를 불렀는지."""
+
+    number: int
+    user_id: int
+    display_name: str
+
+
 class BingoStateResponse(BaseModel):
     status: str
     called_numbers: list[int]
@@ -22,3 +30,7 @@ class BingoStateResponse(BaseModel):
     players: list[PlayerState]
     winner_user_id: int | None = None
     round: int = 1
+    # 지금 숫자를 부를 차례인 사람. 진행 중이 아니면 None.
+    turn_user_id: int | None = None
+    # 호출된 순서 그대로의 기록 (called_numbers는 정렬된 집합이라 순서를 알 수 없다).
+    call_log: list[CallEntry] = []

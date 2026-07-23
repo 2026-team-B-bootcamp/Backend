@@ -56,3 +56,21 @@ class TagInsightProvider(ABC):
     ) -> TagInsight:
         """(태그, 등록 인원) 목록을 받아 한줄 요약과 추천 태그 suggest_count개를 만든다."""
         raise NotImplementedError
+
+
+class WelcomeProvider(ABC):
+    """새 멤버가 채널에 처음 들어왔을 때 띄울 환영 + 자기소개 문구 제공자.
+
+    IcebreakerProvider와 같은 이유로 "{이름}" 플레이스홀더가 든 템플릿을 돌려준다 —
+    관심사 조합이 같으면 이름만 바꿔 재사용할 수 있어 LLM 호출을 아낀다(welcome.py의 캐시).
+    """
+
+    cacheable: bool = False
+
+    @abstractmethod
+    async def generate(self, my_tags: list[str], server_tags: list[str]) -> str:
+        """내 관심사(my_tags)와 모임에서 많이 쓰이는 관심사(server_tags)로 환영 문구를 만든다.
+
+        반환 문자열에는 "{이름}"이 한 번 이상 들어가야 한다(호출부가 실제 이름으로 치환).
+        """
+        raise NotImplementedError
