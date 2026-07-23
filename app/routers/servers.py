@@ -112,6 +112,7 @@ async def list_members(
             MemberResponse(
                 user_id=member.id,
                 display_name=member.display_name,
+                avatar_url=member.avatar_url,
                 tags=member_tags,
                 common_with_me=common,
             )

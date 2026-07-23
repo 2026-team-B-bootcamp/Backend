@@ -18,6 +18,11 @@ class MessageOut(BaseModel):
     id: int
     user_id: int
     display_name: str
+    # 작성자 프로필 사진. 없으면 프런트가 이름 첫 글자 아바타로 대체한다.
+    avatar_url: str | None = None
     tags: list[str] = []
     content: str
+    # "user"(사람이 쓴 메시지) / "welcome"(첫 입장 시 자동 생성된 환영·자기소개 카드).
+    # 프런트는 welcome을 일반 말풍선이 아니라 별도 카드로 그린다.
+    kind: str = "user"
     created_at: datetime

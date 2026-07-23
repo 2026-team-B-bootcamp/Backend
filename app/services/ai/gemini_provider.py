@@ -1,4 +1,4 @@
-"""Gemini API를 실제로 호출하는 IcebreakerProvider / TagInsightProvider 구현체.
+"""Gemini API를 실제로 호출하는 Icebreaker / TagInsight / Welcome 제공자 구현체.
 
 프롬프트로 태그 목록을 주고 "{이름}" 플레이스홀더가 든 질문 템플릿 여러 개를
 JSON 배열로 한 번에 받아온다 (LLM 1회 호출로 배치 생성).
@@ -15,10 +15,16 @@ from google import genai
 from google.genai import types
 
 from app.core.config import settings
-from app.services.ai.base import IcebreakerProvider, TagInsight, TagInsightProvider
+from app.services.ai.base import (
+    IcebreakerProvider,
+    TagInsight,
+    TagInsightProvider,
+    WelcomeProvider,
+)
 from app.services.ai.stub_provider import (
     TemplateIcebreakerProvider,
     TemplateTagInsightProvider,
+    TemplateWelcomeProvider,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,3 +199,69 @@ class GeminiTagInsightProvider(TagInsightProvider):
             logger.exception("Gemini 관심사 요약 실패 — stub으로 폴백")
 
         return await self._fallback.summarize(tag_counts, member_count, suggest_count)
+
+
+# 짧은 인사 한 문장이라 통계 요약보다도 빨리 끝난다.
+_WELCOME_TIMEOUT_SECONDS = 6.0
+
+_WELCOME_PROMPT = """당신은 온라인 모임에 새로 들어온 사람을 소개해주는 진행자입니다.
+
+새 멤버의 관심사: {my_tags}
+이 모임에서 이미 많이 나오는 관심사: {server_tags}
+
+새 멤버가 채널에 처음 들어온 순간 채팅창에 뜰 환영 + 자기소개 문구를 한국어로 한 개 만드세요.
+
+규칙:
+- 2문장 이내, 전체 80자 이내로 쓰세요.
+- 새 멤버를 부르는 자리는 문자 그대로 "{{이름}}님"으로 쓰고, 반드시 한 번 넣으세요.
+- 새 멤버의 관심사를 자연스럽게 한두 개 언급해 자기소개가 되게 하세요.
+- 모임의 관심사와 겹치는 게 있으면 그 지점을 짚어 "말 걸 실마리"를 주세요.
+- 과장된 환영사나 이모지 남발은 피하고, 사람이 쓴 것처럼 담백하게 쓰세요.
+- 다른 설명 없이 문구 한 줄만 출력하세요."""
+
+
+class GeminiWelcomeProvider(WelcomeProvider):
+    """새 멤버 환영 문구를 Gemini로 만드는 구현체.
+
+    실패(타임아웃·빈 응답·플레이스홀더 누락)는 stub 템플릿으로 폴백한다 —
+    채널 첫 입장이라는 중요한 순간에 빈 화면이 뜨면 안 된다.
+    결과는 welcome.py가 관심사 조합 키로 Redis에 캐시한다(cacheable=True).
+    """
+
+    cacheable = True
+
+    def __init__(self, client: genai.Client | None = None) -> None:
+        self._client = client or genai.Client(api_key=settings.gemini_api_key)
+        self._fallback = TemplateWelcomeProvider()
+
+    async def generate(self, my_tags: list[str], server_tags: list[str]) -> str:
+        mine = [t for t in my_tags if t and t.strip()]
+        if not mine:
+            # 소개할 관심사가 없으면 LLM에 물어볼 것도 없다.
+            return await self._fallback.generate(my_tags, server_tags)
+
+        prompt = _WELCOME_PROMPT.format(
+            my_tags=", ".join(mine),
+            server_tags=", ".join(t for t in server_tags if t) or "(아직 없음)",
+        )
+        try:
+            response = await asyncio.wait_for(
+                self._client.aio.models.generate_content(
+                    model=settings.gemini_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        thinking_config=types.ThinkingConfig(thinking_level="minimal"),
+                        max_output_tokens=200,
+                    ),
+                ),
+                timeout=_WELCOME_TIMEOUT_SECONDS,
+            )
+            text = (response.text or "").strip().strip('"')
+            # 플레이스홀더가 없으면 이름을 끼울 자리가 없어 캐시 재사용이 불가능하다.
+            if text and "{이름}" in text:
+                return text
+            logger.warning("Gemini 환영 문구에 {이름} 플레이스홀더 없음 — stub으로 폴백")
+        except Exception:
+            logger.exception("Gemini 환영 문구 생성 실패 — stub으로 폴백")
+
+        return await self._fallback.generate(my_tags, server_tags)
