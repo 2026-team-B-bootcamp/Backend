@@ -11,19 +11,25 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.core.config import settings
 from app.core.redis import get_redis
 from app.db.base import engine
 from app.routers import (
     ai,
     auth,
+    balance,
     bingo,
-    ladder,
+    chosung,
+    draw,
+    games,
+    link_preview,
     messages,
     omok,
     servers,
     tags,
+    tictactoe,
     users,
-    wheel,
+    watch,
     wordchain,
     ws,
 )
@@ -48,14 +54,25 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Rapport Tag Service", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# 개발 편의: localhost 계열은 포트와 무관하게 허용 (Vite가 5173이 점유되면 5174+로 뜸)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS 설정. CORS_ORIGINS(쉼표 구분)가 설정돼 있으면 그 출처만 명시적으로 허용하고
+# (배포용), 비어 있으면 개발 편의를 위해 localhost 계열을 포트와 무관하게 허용한다
+# (Vite가 5173이 점유되면 5174+로 뜸).
+if settings.cors_origin_list:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # 각 라우터를 앱에 연결한다. 예: auth.router는 "/auth/signup" 같은 경로를 처리한다.
 app.include_router(auth.router)
@@ -63,10 +80,15 @@ app.include_router(users.router)
 app.include_router(servers.router)
 app.include_router(tags.router)
 app.include_router(bingo.router)
+app.include_router(balance.router)
 app.include_router(wordchain.router)
-app.include_router(wheel.router)
-app.include_router(ladder.router)
 app.include_router(omok.router)
+app.include_router(tictactoe.router)
+app.include_router(chosung.router)
+app.include_router(games.router)
+app.include_router(watch.router)
+app.include_router(draw.router)
+app.include_router(link_preview.router)
 app.include_router(messages.router)
 app.include_router(ai.router)
 app.include_router(ws.router)

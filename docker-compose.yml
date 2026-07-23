@@ -43,6 +43,14 @@ services:
 
   api:
     build: .
+    # 이미지 CMD/ENTRYPOINT는 프로덕션용(마이그레이션 후 --reload 없이 실행)으로
+    # 바뀌었다. 개발에서는 bind-mount(./:/app) + 핫 리로드가 동작해야 하므로
+    # 여기서 command로 개발 서버(uvicorn --reload)를 덮어써 엔트리포인트를 우회한다.
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--reload"]
+    # 프로덕션 이미지는 비-root(appuser)로 실행되지만, 개발에서는 bind-mount 된
+    # 호스트 폴더(./)에 자유롭게 쓸 수 있어야 하므로(예: static/avatars 생성)
+    # 기존처럼 root로 되돌린다. .pyc는 이미지 ENV PYTHONDONTWRITEBYTECODE로 억제된다.
+    user: root
     ports:
       - "8000:8000"
     volumes:

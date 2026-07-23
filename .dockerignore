@@ -1,0 +1,24 @@
+# 시크릿·로컬 상태가 이미지 빌드 컨텍스트로 들어가지 않게 막는다.
+.env
+.env.*
+!.env.example
+
+# 파이썬/도구 캐시와 가상환경 (이미지에서 새로 설치한다)
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# VCS·에디터·OMC 로컬 상태
+.git/
+.github/
+.omc/
+.vscode/
+.idea/
+
+# 문서·테스트 산출물
+*.md
+htmlcov/
+.coverage
