@@ -3,11 +3,11 @@
 # 핵심 차이점:
 #  - bind-mount·핫 리로드 없음. 소스는 이미지에 구워진 채로 실행된다(Dockerfile).
 #  - db·redis는 호스트 포트를 열지 않는다(내부 네트워크로만 접근). pgadmin 제외.
+#  - api도 호스트 포트를 열지 않는다 — 외부 노출은 caddy(80/443)뿐이다.
 #  - 모든 서비스 restart: unless-stopped.
-#  - 시크릿·접속정보는 커밋된 .env가 아니라 배포 플랫폼이 환경변수로 주입한다
-#    (${...}). 아래 값들은 플랫폼 대시보드/시크릿 매니저에서 설정한다:
-#    POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, JWT_SECRET,
-#    GEMINI_API_KEY, CORS_ORIGINS 등.
+#  - 시크릿·접속정보는 EC2의 /opt/ieum/.env(600 권한, 커밋 금지)에서 온다.
+#    compose가 같은 디렉터리의 .env를 자동으로 읽어 ${...}를 채운다.
+#    필요한 키 전체 목록은 DEPLOY.md 참고.
 services:
   db:
     # 개발과 동일한 pgvector 포함 PG16 이미지. extension·테이블은 alembic이 만든다.
@@ -41,14 +41,20 @@ services:
       retries: 10
 
   api:
-    # 프로덕션 Dockerfile로 빌드 — 소스를 이미지에 굽고, 비-root로,
-    # 엔트리포인트가 alembic upgrade head 후 --reload 없이 uvicorn을 띄운다.
+    # image와 build를 함께 둔다:
+    #  - CD(GitHub Actions)는 GHCR에 밀어둔 이미지를 IMAGE_TAG로 pull 한다.
+    #    `docker compose pull api && docker compose up -d` → EC2에서 빌드 안 함.
+    #  - 최초 수동 배포나 GHCR을 못 쓸 때는 `up -d --build`로 로컬 빌드한다.
+    #    이 경우 빌드 결과가 아래 image 이름으로 태깅돼 그대로 뜬다.
+    # IMAGE_TAG를 sha-<커밋>으로 주면 그 커밋으로 즉시 롤백된다(DEPLOY.md 8절).
+    image: ${API_IMAGE:-ghcr.io/2026-team-b-bootcamp/backend}:${IMAGE_TAG:-latest}
     build: .
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    # 호스트 포트 매핑 없음 — caddy 뒤로 숨긴다. 평문 8000은 외부에 열리지 않는다.
+    expose:
+      - "8000"
     environment:
-      # 접속정보·시크릿은 배포 플랫폼이 주입한다(커밋된 .env 아님).
+      # 접속정보·시크릿은 /opt/ieum/.env가 주입한다(커밋된 값 아님).
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: ${JWT_SECRET}
@@ -56,12 +62,52 @@ services:
       # 허용할 프론트 출처(쉼표 구분 https 목록). 비어 있으면 localhost 폴백이라
       # 프로덕션에서는 반드시 실제 도메인을 지정한다.
       CORS_ORIGINS: ${CORS_ORIGINS}
+    volumes:
+      # 업로드된 아바타(app/services/user_service.py가 static/avatars에 저장)를
+      # 이미지 밖 볼륨에 보존한다. 없으면 재배포마다 프로필 이미지가 전부 사라진다.
+      - avatars:/app/static/avatars
+    healthcheck:
+      # 마이그레이션 실패·기동 실패를 compose가 인지하게 한다. 이미지에 curl이
+      # 없으므로(python:3.12-slim) 파이썬 표준 라이브러리로 때린다.
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\"",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      # alembic upgrade head가 끝날 때까지의 여유. 이 구간의 실패는 카운트되지 않는다.
+      start_period: 60s
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
 
+  caddy:
+    # TLS 종단 + 리버스 프록시. Let's Encrypt 인증서를 자동 발급·갱신한다.
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80" # HTTP-01 챌린지 + HTTPS 리다이렉트
+      - "443:443" # HTTPS / WSS
+    environment:
+      # Caddyfile의 {$...} 자리를 채운다. 예: ieum.duckdns.org
+      SITE_ADDRESS: ${SITE_ADDRESS}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data # 발급받은 인증서 — 반드시 영속화한다
+      - caddyconfig:/config
+      - caddylogs:/var/log/caddy
+    depends_on:
+      - api
+
 volumes:
   pgdata:
   redisdata:
+  avatars: # 업로드 아바타 — 재배포에도 살아남아야 한다
+  caddydata: # 인증서 — 빼먹으면 배포마다 재발급 → Let's Encrypt 한도 초과
+  caddyconfig:
+  caddylogs:
