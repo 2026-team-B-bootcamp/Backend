@@ -46,7 +46,7 @@ feature/*  --PR-->  main  --PR-->  release  --자동 배포-->  EC2
 | 리전 | `ap-northeast-2` | 사용자 위치 |
 | 타입 | **t3.small** (2 vCPU / 2GB) | 컨테이너 4개. t3.micro는 부족 |
 | 스토리지 | gp3 20GB | 이미지 + pgdata + 아바타 |
-| OS | Ubuntu 22.04 LTS | |
+| OS | Ubuntu LTS (22.04~26.04 확인됨) | |
 | EIP | **할당** | 재부팅해도 IP가 유지돼야 DuckDNS를 다시 안 건다 |
 
 **보안 그룹(인바운드)**
@@ -67,9 +67,14 @@ feature/*  --PR-->  main  --PR-->  release  --자동 배포-->  EC2
 **셋업 스크립트** — 인스턴스 생성 후 SSH로 접속해 1회 실행한다.
 
 ```bash
-sh scripts/ec2-bootstrap.sh   # 스왑 4GB · Docker · 로그 로테이션 · /opt/ieum
+curl -fsSL https://raw.githubusercontent.com/2026-team-B-bootcamp/Backend/release/scripts/ec2-bootstrap.sh -o /tmp/bootstrap.sh
+sh /tmp/bootstrap.sh          # 중단된 dpkg 복구 · 스왑 4GB · Docker · 로그 로테이션 · /opt/ieum
 exit                          # docker 그룹 반영을 위해 재로그인 필수
 ```
+
+여러 번 다시 돌려도 안전하다(멱등). 앞선 실행이 끊겼다면 이어서 마무리한다.
+`curl | sh` 대신 파일로 받아 실행하는 이유는, 파이프로 넘기면 어디서 실패했는지
+보이지 않고 재실행할 때마다 다시 받아야 하기 때문이다.
 
 ---
 
