@@ -107,7 +107,14 @@ jobs:
               echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
             fi
 
-            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
+            # GHCR 패키지를 public으로 두면 인증 없이 pull 된다 — 그 경우
+            # GHCR_TOKEN 시크릿을 만들 필요가 없다(관리·회전할 자격증명이 하나 줄어든다).
+            # 패키지가 private이면 read:packages PAT를 GHCR_TOKEN에 넣어야 한다.
+            if [ -n "${GHCR_TOKEN}" ]; then
+              echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
+            else
+              echo "GHCR_TOKEN 없음 — 익명 pull을 시도한다(패키지가 public이어야 함)"
+            fi
 
             docker compose -f docker-compose.prod.yml pull api
             docker compose -f docker-compose.prod.yml up -d --no-build
@@ -126,7 +133,7 @@ jobs:
             done
 
             docker image prune -f
-            docker logout ghcr.io
+            [ -n "${GHCR_TOKEN}" ] && docker logout ghcr.io || true
 
       - name: 외부 스모크 테스트
         # SITE_ADDRESS는 repo Variables(Settings > Secrets and variables > Actions
