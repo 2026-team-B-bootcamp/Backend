@@ -1,0 +1,31 @@
+# Caddy 리버스 프록시 — TLS 종단 + api 컨테이너로 전달.
+#
+# {$VAR} 는 Caddy가 기동 시 자기 프로세스의 환경변수에서 읽는 값이다
+# (docker-compose.prod.yml의 caddy.environment 참고). 도메인을 파일에
+# 하드코딩하지 않으므로 EC2 .env의 SITE_ADDRESS만 바꾸면 주소가 바뀐다.
+#
+#   SITE_ADDRESS=ieum.duckdns.org      # DuckDNS 서브도메인 (A 레코드 → EC2 EIP)
+#   ACME_EMAIL=team@example.com        # Let's Encrypt 만료 알림 수신 주소
+{
+	email {$ACME_EMAIL}
+}
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# WebSocket(/ws/*)도 이 한 줄로 통과한다 — Caddy v2는 Upgrade/Connection
+	# 헤더를 자동으로 그대로 전달하므로 별도 설정이 필요 없다.
+	#
+	# 업로드된 아바타(FastAPI가 /static으로 서빙)도 같은 프록시를 탄다.
+	#
+	# 슬랙 봇을 붙일 때 주의: X-Slack-Signature 검증은 원본 body 바이트가
+	# 그대로여야 한다. encode는 "응답"에만 적용되므로 요청 body는 무손상이다.
+	reverse_proxy api:8000
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

@@ -2,9 +2,12 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, release]
   pull_request:
-    branches: [main]
+    branches: [main, release]
+  # deploy.yml이 배포 직전 게이트로 이 워크플로를 그대로 재사용한다
+  # (jobs.ci.uses: ./.github/workflows/ci.yml). lint/test 정의를 한 곳에만 둔다.
+  workflow_call:
 
 jobs:
   lint:

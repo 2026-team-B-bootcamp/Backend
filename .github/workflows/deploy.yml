@@ -1,0 +1,138 @@
+# CD — release 브랜치에 올라온 커밋을 EC2에 배포한다.
+#
+# 브랜치 전략:
+#   feature/* --PR--> main      (일상 개발. ci.yml이 게이트)
+#   main      --PR--> release   (배포하기로 결정한 시점에만. 이 워크플로가 돈다)
+#
+# main 푸시로는 배포되지 않는다. "머지했더니 프로덕션이 바뀌어 있는" 사고를 막고,
+# 배포 시점을 사람이 고르게 하기 위해서다.
+#
+# 방식: GitHub Actions에서 이미지를 빌드해 GHCR에 올리고, EC2는 pull만 한다.
+# EC2(t3.small)에서 빌드하지 않으므로 배포 중 서비스가 느려지지 않고,
+# 이미지 태그(sha-<커밋>)로 즉시 롤백할 수 있다.
+name: Deploy
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "롤백용. 배포할 기존 이미지 태그(예: sha-a1b2c3d). 비우면 현재 release를 새로 빌드한다."
+        required: false
+        type: string
+
+# 배포가 겹치면 EC2 상태가 꼬인다. 앞 배포가 끝날 때까지 기다린다(취소하지 않는다).
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/2026-team-b-bootcamp/backend
+
+jobs:
+  # 배포 직전 게이트. ci.yml(ruff + pytest)을 그대로 재사용한다.
+  # 롤백(image_tag 지정)은 이미 검증된 이미지를 다시 띄우는 것이므로 건너뛴다.
+  ci:
+    if: ${{ !inputs.image_tag }}
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    if: ${{ !inputs.image_tag }}
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # sha-<커밋>은 롤백 좌표, latest는 수동 배포 편의용.
+          tags: |
+            ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    # 롤백 경로에서는 build가 skipped라 needs 기본 조건에 걸린다 → always()로 풀고
+    # "롤백이거나 빌드 성공" 일 때만 진행하도록 직접 판정한다.
+    if: ${{ always() && (inputs.image_tag || needs.build.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: 배포할 이미지 태그 결정
+        id: tag
+        run: |
+          TAG="${{ inputs.image_tag || format('sha-{0}', github.sha) }}"
+          echo "value=$TAG" >> "$GITHUB_OUTPUT"
+          echo "배포 대상: ${{ env.IMAGE_NAME }}:$TAG"
+
+      - name: EC2에 배포
+        uses: appleboy/ssh-action@v1
+        env:
+          IMAGE_TAG: ${{ steps.tag.outputs.value }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: IMAGE_TAG,GHCR_USER,GHCR_TOKEN
+          script: |
+            set -euo pipefail
+            cd /opt/ieum
+
+            # compose 파일·Caddyfile 갱신. /opt/ieum은 release 브랜치를 추적한다.
+            git fetch origin release
+            git reset --hard origin/release
+
+            # 배포된 태그를 .env에 남긴다. 이후 누가 손으로
+            # `docker compose up -d`를 해도 같은 이미지가 뜬다.
+            if grep -q '^IMAGE_TAG=' .env; then
+              sed -i "s|^IMAGE_TAG=.*|IMAGE_TAG=${IMAGE_TAG}|" .env
+            else
+              echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
+            fi
+
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GHCR_USER}" --password-stdin
+
+            docker compose -f docker-compose.prod.yml pull api
+            docker compose -f docker-compose.prod.yml up -d --no-build
+
+            # api가 healthy로 올라올 때까지 기다린다(마이그레이션 시간 포함).
+            # 여기서 실패하면 배포를 실패로 처리해 Actions가 빨갛게 뜬다.
+            for i in $(seq 1 30); do
+              STATE=$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose -f docker-compose.prod.yml ps -q api)" 2>/dev/null || echo starting)
+              [ "$STATE" = "healthy" ] && break
+              if [ "$i" = "30" ]; then
+                echo "api가 healthy 상태가 되지 못했습니다. 최근 로그:"
+                docker compose -f docker-compose.prod.yml logs --tail=80 api
+                exit 1
+              fi
+              sleep 5
+            done
+
+            docker image prune -f
+            docker logout ghcr.io
+
+      - name: 외부 스모크 테스트
+        # SITE_ADDRESS는 repo Variables(Settings > Secrets and variables > Actions
+        # > Variables)에 등록한다. 예: ieum.duckdns.org
+        if: ${{ vars.SITE_ADDRESS != '' }}
+        run: |
+          curl -fsS --retry 5 --retry-delay 5 --retry-connrefused \
+            "https://${{ vars.SITE_ADDRESS }}/health" | grep -q '"status":"ok"'
+          echo "https://${{ vars.SITE_ADDRESS }}/health OK"
