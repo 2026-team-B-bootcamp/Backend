@@ -72,7 +72,6 @@ def test_unknown_reply_echoes_input_with_help():
         ("끝말잇기", "wordchain"),
         ("유튜브", "watch"),
         ("그림판", "draw"),
-        ("태그", "tags"),
         # 영문 별칭과 대소문자
         ("BINGO", "bingo"),
         ("게임 Omok", "omok"),
@@ -84,9 +83,52 @@ def test_resolve_feature(text, expected_key):
     assert feature.key == expected_key
 
 
-@pytest.mark.parametrize("text", ["핑", "도움말", "", "없는게임", "게임 없는게임"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "핑",
+        "도움말",
+        "",
+        "없는게임",
+        "게임 없는게임",
+        # 슬랙 안에서 끝나는 명령들은 웹으로 내보낼 기능이 아니다
+        "태그",
+        "태그등록",
+        "말걸어줘",
+    ],
+)
 def test_resolve_feature_returns_none(text):
     assert resolve_feature(parse_command(text)) is None
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("태그등록", "tag_edit"),
+        ("내태그", "tag_edit"),
+        ("태그", "tag_view"),
+        ("관심사", "tag_view"),
+        ("말걸어줘", "icebreaker"),
+        ("아이스브레이커", "icebreaker"),
+    ],
+)
+def test_slack_native_commands(text, expected):
+    """태그·AI는 슬랙 안에서 끝난다 — 웹 링크로 내보내지 않는다."""
+    assert parse_command(text).name == expected
+
+
+def test_catalog_only_has_shared_activities():
+    """슬랙에서 웹으로 보내는 것은 '여럿이 같이 하는 것'뿐이다.
+
+    채팅·멤버목록처럼 혼자 보는 화면까지 링크로 내보내면, 슬랙에서 이미 대화
+    중인 사람을 굳이 브라우저로 쫓아내는 셈이 된다.
+    """
+    keys = {f.key for f in features.FEATURES}
+    assert "chat" not in keys
+    assert "members" not in keys
+    assert {"watch", "draw"} <= keys
+    # 모든 기능이 전용 화면을 갖는다 — 빈 page가 있으면 링크가 깨진다
+    assert all(f.page for f in features.FEATURES)
 
 
 def test_game_catalog_matches_web():
