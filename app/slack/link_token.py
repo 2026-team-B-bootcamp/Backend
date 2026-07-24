@@ -21,10 +21,18 @@ LINK_TOKEN_EXPIRE_MINUTES = 15
 
 
 def build_entry_link(user: User, channel: Channel, feature: Feature) -> str:
-    """이 유저로 로그인된 채로 해당 기능이 열린 채널 화면으로 가는 링크."""
+    """이 유저로 로그인된 채로, 그 기능만 있는 전용 화면으로 가는 링크.
+
+    채팅방(+떠다니는 PIP)이 아니라 전용 경로로 보낸다. "빙고 하자"를 눌러 들어온
+    사람에게 채팅방 위 작은 창을 주면 정작 하러 온 것이 곁다리로 보인다.
+    채널과 실시간 연결은 채팅방과 같아서, 웹에서 PIP로 하는 사람과 같은 판에서 만난다.
+    """
     token = create_access_token(
         str(user.id), user.token_version, expire_minutes=LINK_TOKEN_EXPIRE_MINUTES
     )
-    query = urlencode({"t": token, "open": feature.open})
     base = settings.public_web_url.rstrip("/")
-    return f"{base}/servers/{channel.server_id}/channels/{channel.id}?{query}"
+    path = f"{base}/servers/{channel.server_id}/channels/{channel.id}"
+    # 전용 화면이 없는 항목(채팅)은 채널 화면 자체가 목적지다.
+    if feature.page:
+        path += f"/play/{feature.page}"
+    return f"{path}?{urlencode({'t': token})}"
