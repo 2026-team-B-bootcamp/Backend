@@ -62,6 +62,14 @@ services:
       # 허용할 프론트 출처(쉼표 구분 https 목록). 비어 있으면 localhost 폴백이라
       # 프로덕션에서는 반드시 실제 도메인을 지정한다.
       CORS_ORIGINS: ${CORS_ORIGINS}
+      # 슬랙 봇. 두 값이 다 있어야 app/main.py가 /slack/* 라우터를 등록한다 —
+      # 비워두면 슬랙 기능만 꺼지고 나머지 서비스는 그대로 뜬다.
+      # 프로덕션 이미지에는 .env가 들어있지 않으므로(.dockerignore) 여기 나열된
+      # 것만 컨테이너에 전달된다. .env에 넣는 것만으로는 앱에 닿지 않는다.
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN}
+      SLACK_SIGNING_SECRET: ${SLACK_SIGNING_SECRET}
+      # 봇이 발급하는 입장 링크의 기준(프론트 주소).
+      PUBLIC_WEB_URL: ${PUBLIC_WEB_URL}
     volumes:
       # 업로드된 아바타(app/services/user_service.py가 static/avatars에 저장)를
       # 이미지 밖 볼륨에 보존한다. 없으면 재배포마다 프로필 이미지가 전부 사라진다.
