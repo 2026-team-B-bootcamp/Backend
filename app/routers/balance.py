@@ -23,7 +23,7 @@ from app.schemas.balance import (
     StartBalanceRequest,
     VoteBalanceRequest,
 )
-from app.services import server_service
+from app.services import game_announce, server_service
 from app.services.balance.store import BalanceGame, BalanceStore, get_balance_store
 from app.services.game_registry import GameRegistry, get_game_registry
 from app.services.realtime import hub
@@ -72,11 +72,17 @@ async def start_balance(
 ) -> BalanceStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
     await registry.acquire(channel_id, "balance")
+    # 게임이 없던 채널이면 이 참가가 새 판을 여는 것이다 — 채팅만 보고 있던
+    # 사람에게도 보이도록 입장 카드를 남긴다. 참가한 뒤에 판정하면 이미 waiting
+    # 상태라 "새로 열린 것"인지 "이미 있던 판에 낀 것"인지 구분할 수 없다.
+    was_empty = await store.status(channel_id) == "none"
     game = await store.start(
         channel_id, payload.option_a, payload.option_b, current_user.id, current_user.display_name
     )
     now = time.time()
     await _broadcast(channel_id, game, now)
+    if was_empty:
+        await game_announce.announce_opened(db, channel_id, current_user, "balance")
     return _serialize(game, current_user.id, now)
 
 

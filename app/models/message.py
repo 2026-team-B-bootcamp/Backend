@@ -11,9 +11,11 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 
-# kind 값 — 사람이 쓴 일반 메시지 / 첫 입장 시 자동 생성되는 환영·자기소개 카드
+# kind 값 — 사람이 쓴 일반 메시지 / 첫 입장 시 자동 생성되는 환영·자기소개 카드 /
+# 게임이 새로 열렸을 때 남기는 입장 카드(content에 게임 키가 들어간다)
 KIND_USER = "user"
 KIND_WELCOME = "welcome"
+KIND_GAME = "game"
 
 
 class Message(Base):
