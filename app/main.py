@@ -93,6 +93,15 @@ app.include_router(messages.router)
 app.include_router(ai.router)
 app.include_router(ws.router)
 
+# 슬랙 봇은 토큰·서명 시크릿이 설정된 환경에서만 켠다. 값이 없으면 라우터 자체를
+# 달지 않아, 슬랙 설정 없는 로컬/CI에서도 기존 웹 서비스가 그대로 동작한다.
+# ⚠️ 슬랙 서명 검증은 raw body를 읽으므로, 이 라우터 앞에 body를 소비하는
+# 미들웨어를 추가하면 안 된다 (현재는 CORS뿐이라 안전).
+if settings.slack_enabled:
+    from app.slack.router import build_router as build_slack_router
+
+    app.include_router(build_slack_router())
+
 
 # 서버가 살아있는지 확인하는 헬스체크 엔드포인트.
 @app.get("/health")

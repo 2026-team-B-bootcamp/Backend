@@ -15,6 +15,10 @@ dependencies = [
     "pyjwt>=2.10.0",
     "python-multipart>=0.0.32",
     "redis>=5.0",
+    # slack-bolt의 AsyncApp/AsyncWebClient는 aiohttp를 쓰는데 slack-bolt가 필수
+    # 의존성으로 걸지 않는다(동기 앱은 필요 없어서). 없으면 임포트부터 실패한다.
+    "aiohttp>=3.10",
+    "slack-bolt>=1.21",
     "sqlalchemy[asyncio]>=2.0.51",
     "uvicorn[standard]>=0.51.0",
 ]
