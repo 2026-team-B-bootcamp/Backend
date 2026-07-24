@@ -21,6 +21,7 @@ def _to_response(user: User) -> UserResponse:
         email=user.email,
         display_name=user.display_name,
         avatar_url=user.avatar_url,
+        is_guest=user.is_guest,
     )
 
 

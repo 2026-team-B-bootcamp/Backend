@@ -42,7 +42,14 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
     # 이메일이 없거나 비밀번호가 틀리면 이유를 구분하지 않고 같은 에러로 응답한다
     # (계정 존재 여부가 노출되지 않도록 하기 위함).
     user = await db.scalar(select(User).where(User.email == payload.email))
-    if user is None or not await verify_password(payload.password, user.password_hash):
+    # 게스트(슬랙 경유 자동 생성)는 비밀번호 자체가 없다. password_hash가 NULL이라
+    # verify_password에 넘기면 argon2가 InvalidHash를 던져 500이 난다 —
+    # 그 전에 다른 실패와 똑같은 401로 끊는다.
+    if user is None or user.is_guest or user.password_hash is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
+        )
+    if not await verify_password(payload.password, user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password"
         )
