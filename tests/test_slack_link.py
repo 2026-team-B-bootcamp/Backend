@@ -49,9 +49,8 @@ async def test_link_points_at_the_right_channel_and_feature(db):
     link = build_entry_link(user, channel, by_key("bingo"))
 
     parsed = urlparse(link)
-    query = parse_qs(parsed.query)
-    assert parsed.path == f"/servers/{channel.server_id}/channels/{channel.id}"
-    assert query["open"] == ["bingo"]
+    # 채팅방이 아니라 빙고만 있는 전용 화면으로 보낸다.
+    assert parsed.path == f"/servers/{channel.server_id}/channels/{channel.id}/play/bingo"
     assert parsed.scheme in ("http", "https")
 
 
@@ -114,7 +113,7 @@ async def test_every_feature_produces_a_usable_link(db, word):
     feature = find(word)
     assert feature is not None
     link = build_entry_link(user, channel, feature)
-    assert parse_qs(urlparse(link).query)["open"] == [feature.open]
+    assert urlparse(link).path.endswith(f"/play/{feature.page}")
 
 
 async def test_link_token_actually_authenticates(client, db_engine):
@@ -198,8 +197,8 @@ async def test_issue_entry_link_creates_everything(db_engine, slack_session):
     fake = _FakeSlackClient(display_name="박민수")
     link = await _issue_entry_link(fake, _action_body(), by_key("bingo"))
 
+    assert urlparse(link).path.endswith("/play/bingo")
     query = parse_qs(urlparse(link).query)
-    assert query["open"] == ["bingo"]
 
     maker = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
     async with maker() as session:
@@ -243,8 +242,10 @@ async def test_two_clickers_get_separate_accounts_same_channel(db_engine, slack_
     a_q, b_q = parse_qs(urlparse(a).query), parse_qs(urlparse(b).query)
     assert decode_access_token(a_q["t"][0])["sub"] != decode_access_token(b_q["t"][0])["sub"]
     # 다른 사람이어도 같은 채널로 들어가야 한다 — 같이 놀아야 하므로
-    assert urlparse(a).path == urlparse(b).path
-    assert a_q["open"] == ["bingo"] and b_q["open"] == ["omok"]
+    channel_path = lambda u: urlparse(u).path.rsplit("/play/", 1)[0]  # noqa: E731
+    assert channel_path(a) == channel_path(b)
+    assert urlparse(a).path.endswith("/play/bingo")
+    assert urlparse(b).path.endswith("/play/omok")
 
 
 async def test_expired_link_is_rejected(client, db_engine, monkeypatch):
@@ -272,3 +273,32 @@ async def test_expired_link_is_rejected(client, db_engine, monkeypatch):
 
     res = await client.get("/users/me", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 401
+
+
+# ── 전용 화면 경로 규칙 ──────────────────────────────────────────────
+
+
+async def test_tags_link_goes_to_tag_page(db):
+    """태그 등록도 슬랙에서 바로 열 수 있어야 한다."""
+    user, channel = await _context(db)
+    link = build_entry_link(user, channel, by_key("tags"))
+    assert urlparse(link).path.endswith("/play/tags")
+
+
+async def test_chat_link_has_no_play_segment(db):
+    """채팅은 전용 화면이 없다 — 채널 화면 자체가 목적지다."""
+    user, channel = await _context(db)
+    link = build_entry_link(user, channel, by_key("chat"))
+    path = urlparse(link).path
+    assert path == f"/servers/{channel.server_id}/channels/{channel.id}"
+    assert "/play/" not in path
+
+
+async def test_token_never_leaks_into_the_path(db):
+    """토큰은 쿼리에만 있어야 한다 — 경로에 섞이면 서버 접근 로그에 그대로 남는다."""
+    user, channel = await _context(db)
+    for feature_key in ("bingo", "watch", "tags", "chat"):
+        link = build_entry_link(user, channel, by_key(feature_key))
+        parsed = urlparse(link)
+        assert "t=" not in parsed.path
+        assert parse_qs(parsed.query)["t"]

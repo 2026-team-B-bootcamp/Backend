@@ -72,7 +72,7 @@ def test_unknown_reply_echoes_input_with_help():
         ("끝말잇기", "wordchain"),
         ("유튜브", "watch"),
         ("그림판", "draw"),
-        ("태그", "members"),
+        ("태그", "tags"),
         # 영문 별칭과 대소문자
         ("BINGO", "bingo"),
         ("게임 Omok", "omok"),
