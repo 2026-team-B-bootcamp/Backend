@@ -18,7 +18,8 @@ from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.web.async_slack_response import AsyncSlackResponse
 
 from app.core.config import settings
-from app.slack.handlers import HELP_TEXT, build_command_reply, parse_command
+from app.slack import features
+from app.slack.handlers import HELP_TEXT, parse_command, resolve_feature, unknown_reply
 
 SIGNING_SECRET = "test-slack-signing-secret"
 
@@ -50,13 +51,67 @@ def test_parse_command_keeps_args():
     assert parsed.raw == "태그 @민수 롤 좋아함"
 
 
-def test_build_command_reply():
-    assert "퐁" in build_command_reply("핑")
-    assert build_command_reply("") == HELP_TEXT
-    # 모르는 명령은 원본을 되비추고 도움말을 함께 준다.
-    unknown = build_command_reply("없는명령")
-    assert "없는명령" in unknown
-    assert HELP_TEXT in unknown
+def test_unknown_reply_echoes_input_with_help():
+    reply = unknown_reply(parse_command("없는명령"))
+    assert "없는명령" in reply
+    assert HELP_TEXT in reply
+
+
+# ── 기능 카탈로그 해석 ───────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_key"),
+    [
+        ("게임 빙고", "bingo"),
+        ("게임 오목", "omok"),
+        ("열기 그림판", "draw"),
+        ("시작 같이보기", "watch"),
+        # 서브커맨드 없이 이름만 쳐도 열린다 — 사람들이 실제로 이렇게 친다.
+        ("빙고", "bingo"),
+        ("끝말잇기", "wordchain"),
+        ("유튜브", "watch"),
+        ("그림판", "draw"),
+        ("태그", "members"),
+        # 영문 별칭과 대소문자
+        ("BINGO", "bingo"),
+        ("게임 Omok", "omok"),
+    ],
+)
+def test_resolve_feature(text, expected_key):
+    feature = resolve_feature(parse_command(text))
+    assert feature is not None, f"{text} 를 해석하지 못했다"
+    assert feature.key == expected_key
+
+
+@pytest.mark.parametrize("text", ["핑", "도움말", "", "없는게임", "게임 없는게임"])
+def test_resolve_feature_returns_none(text):
+    assert resolve_feature(parse_command(text)) is None
+
+
+def test_game_catalog_matches_web():
+    """웹 게임 패널(GamePip)의 6종과 어긋나면 슬랙에서 못 여는 게임이 생긴다."""
+    assert {f.key for f in features.GAMES} == {
+        "bingo",
+        "wordchain",
+        "omok",
+        "tictactoe",
+        "balance",
+        "chosung",
+    }
+
+
+def test_every_feature_is_reachable_by_its_own_label():
+    """모든 기능은 라벨 그대로 쳐서 열 수 있어야 한다(도움말에 라벨을 노출하므로)."""
+    for f in features.FEATURES:
+        assert features.find(f.label) is f, f"{f.label} 로 찾을 수 없다"
+
+
+def test_feature_keys_and_aliases_are_unique():
+    keys = [f.key for f in features.FEATURES]
+    assert len(keys) == len(set(keys))
+    aliases = [a.lower() for f in features.FEATURES for a in f.aliases]
+    assert len(aliases) == len(set(aliases)), "별칭이 겹치면 엉뚱한 기능이 열린다"
 
 
 # ── ② 엔드포인트 왕복 ────────────────────────────────────────────────
