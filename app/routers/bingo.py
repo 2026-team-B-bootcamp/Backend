@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user, get_db
 from app.models.user import User
 from app.schemas.bingo import BingoStateResponse, CallEntry, ClickRequest, PlayerState
-from app.services import server_service
+from app.services import game_announce, server_service
 from app.services.bingo.logic import count_completed_lines
 from app.services.bingo.store import BingoGame, BingoGameStore, get_bingo_store
 from app.services.game_registry import GameRegistry, get_game_registry
@@ -63,8 +63,14 @@ async def join_bingo(
     await server_service.require_channel_access(db, channel_id, current_user.id)
     # 채널을 빙고 게임으로 점유(다른 게임과 동시 진행 방지)한 뒤 참가 처리.
     await registry.acquire(channel_id, "bingo")
+    # 게임이 없던 채널이면 이 참가가 새 판을 여는 것이다 — 채팅만 보고 있던
+    # 사람에게도 보이도록 입장 카드를 남긴다. 참가한 뒤에 판정하면 이미 waiting
+    # 상태라 "새로 열린 것"인지 "이미 있던 판에 낀 것"인지 구분할 수 없다.
+    was_empty = await store.status(channel_id) == "none"
     game = await store.join(channel_id, current_user.id, current_user.display_name)
     await _notify(channel_id)
+    if was_empty:
+        await game_announce.announce_opened(db, channel_id, current_user, "bingo")
     return _serialize(game, current_user.id)
 
 
