@@ -36,10 +36,15 @@ async def verify_password(password: str, password_hash: str) -> bool:
     return await asyncio.to_thread(_verify)
 
 
-def create_access_token(subject: str, token_version: int = 0) -> str:
+def create_access_token(
+    subject: str, token_version: int = 0, expire_minutes: int | None = None
+) -> str:
     # subject(보통 user id)를 담은 JWT를 발급한다. exp(만료시간)가 지나면 토큰은 무효가 된다.
     # ver: 발급 시점의 유저 token_version. 검증 때 DB 값과 대조해 서버측 무효화를 구현한다.
-    expire = datetime.now(UTC) + timedelta(minutes=settings.jwt_expire_minutes)
+    # expire_minutes: 기본(24시간)보다 짧게 쓰고 싶을 때만 지정한다. 슬랙 봇이 채널에
+    #   뿌리는 입장 링크가 그 경우로, 링크가 유출돼도 피해가 짧게 끝나도록 15분을 준다.
+    minutes = settings.jwt_expire_minutes if expire_minutes is None else expire_minutes
+    expire = datetime.now(UTC) + timedelta(minutes=minutes)
     payload = {"sub": subject, "ver": token_version, "exp": expire}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.algorithm)
 
