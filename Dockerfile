@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # uv 설치 (공식 uv 이미지에서 바이너리만 복사)
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
