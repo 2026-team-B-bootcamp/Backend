@@ -67,6 +67,19 @@ class Settings(BaseSettings):
     # 단어 태그만 쓴다면 0.86까지 올려도 된다. .env로 조정 가능.
     tag_similarity_threshold: float = 0.84
 
+    # 슬랙 봇 설정. jwt_secret과 달리 필수 검증을 걸지 않는다 — 슬랙 값이 없어도
+    # 기존 웹 서비스는 그대로 떠야 하고, main.py가 slack_enabled일 때만 라우터를 단다.
+    slack_bot_token: str = ""
+    slack_signing_secret: str = ""
+    # 봇이 발급하는 입장 링크의 기준 주소(프론트). 끝 슬래시 없이.
+    public_web_url: str = "http://localhost:5173"
+
+    @property
+    def slack_enabled(self) -> bool:
+        # 토큰과 서명 시크릿이 둘 다 있어야 슬랙 엔드포인트를 연다.
+        # 하나만 있으면 서명 검증이 불가능하거나 응답을 못 보내므로 켜지 않는다.
+        return bool(self.slack_bot_token and self.slack_signing_secret)
+
     @property
     def async_database_url(self) -> str:
         # database_url이 동기 드라이버(postgresql://) 형식으로 들어와도

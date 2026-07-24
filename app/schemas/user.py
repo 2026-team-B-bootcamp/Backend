@@ -8,9 +8,12 @@ from pydantic import BaseModel, Field
 
 class UserResponse(BaseModel):
     id: int
-    email: str
+    # 슬랙 경유 게스트는 이메일이 없다(models/user.py의 is_guest). 프론트는 이미
+    # 이 필드를 프로필 화면에서만 쓰므로 null이면 빈 값으로 보인다.
+    email: str | None = None
     display_name: str
     avatar_url: str | None = None
+    is_guest: bool = False
 
 
 class UpdateUserRequest(BaseModel):
