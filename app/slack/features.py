@@ -5,7 +5,8 @@
 따로 만들지 않는 이유이기도 하다: 슬랙이 하는 일은 어느 경우든 "개인 링크를
 발급해 웹의 해당 패널을 열어주는 것" 하나뿐이다.
 
-`open` 값은 프론트(ChatPage)가 `?open=` 쿼리로 읽어 패널을 자동으로 연다.
+`page` 값은 웹의 전용 화면 경로(`/servers/{sid}/channels/{cid}/play/{page}`)다.
+빈 문자열이면 전용 화면이 없다는 뜻으로, 채팅방 자체로 보낸다.
 """
 
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ class Feature:
     key: str  # 내부 식별자이자 버튼 value
     label: str  # 사람에게 보이는 이름
     emoji: str
-    open: str  # 프론트 `?open=` 값
+    page: str  # 웹 전용 화면의 경로 조각. 빈 문자열이면 채팅방 자체가 목적지다.
     aliases: tuple[str, ...]  # 사용자가 칠 법한 표현들
     kind: str  # "game" | "tool" — 도움말을 묶어서 보여주는 용도
 
@@ -49,15 +50,11 @@ _TOOLS = (
         "tool",
     ),
     Feature("draw", "그림판", "🎨", "draw", ("그림판", "그림", "화이트보드", "draw"), "tool"),
-    Feature(
-        "members",
-        "멤버",
-        "👥",
-        "members",
-        ("멤버", "태그", "관심사", "members", "tags"),
-        "tool",
-    ),
-    Feature("chat", "채팅", "💬", "chat", ("채팅", "대화", "chat"), "tool"),
+    Feature("members", "멤버", "👥", "members", ("멤버", "멤버목록", "members"), "tool"),
+    # 관심사 태그 등록. 원래는 서버 첫 입장에 뜨는 모달인데, 슬랙에서 바로 부를 수 있게 한다.
+    Feature("tags", "태그", "🏷️", "tags", ("태그", "태그등록", "관심사", "tags"), "tool"),
+    # 전용 화면이 없는 유일한 항목 — 채팅방 자체가 목적지라 page가 비어 있다.
+    Feature("chat", "채팅", "💬", "", ("채팅", "대화", "chat"), "tool"),
 )
 
 FEATURES: tuple[Feature, ...] = _GAMES + _TOOLS
