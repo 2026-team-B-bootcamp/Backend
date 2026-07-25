@@ -18,7 +18,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.web.async_slack_response import AsyncSlackResponse
 
 from app.core.config import settings
-from app.slack import features
+from app.slack import features, handlers
 from app.slack.handlers import HELP_TEXT, parse_command, resolve_feature, unknown_reply
 
 SIGNING_SECRET = "test-slack-signing-secret"
@@ -154,6 +154,63 @@ def test_feature_keys_and_aliases_are_unique():
     assert len(keys) == len(set(keys))
     aliases = [a.lower() for f in features.FEATURES for a in f.aliases]
     assert len(aliases) == len(set(aliases)), "별칭이 겹치면 엉뚱한 기능이 열린다"
+
+
+# ── 자동완성 (타이핑 선택기 · 오타 추천) ──────────────────────────────
+
+
+def test_search_empty_query_lists_everything():
+    """선택기를 열자마자(아직 아무것도 안 쳤을 때) 전체 목록이 보여야 한다."""
+    assert {f.key for f in features.search("")} == {f.key for f in features.FEATURES}
+
+
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [
+        ("빙", "bingo"),
+        ("끝말", "wordchain"),
+        ("오목", "omok"),
+        ("틱", "tictactoe"),
+        ("밸런", "balance"),
+        ("초성", "chosung"),
+        ("bin", "bingo"),
+        ("WAT", "watch"),  # 영문 대소문자를 가리지 않는다
+    ],
+)
+def test_search_narrows_by_prefix(typed, expected):
+    hits = features.search(typed)
+    assert hits, f"'{typed}' 로 아무것도 못 찾았다"
+    assert hits[0].key == expected, "앞부분이 맞는 기능이 맨 위에 와야 한다"
+
+
+@pytest.mark.parametrize(
+    ("typo", "expected"),
+    [
+        ("빙곰", "bingo"),  # 한 글자 오타
+        ("오묵", "omok"),
+        ("빙고게임", "bingo"),  # 뒤에 말을 덧붙인 경우
+        ("watchh", "watch"),
+    ],
+)
+def test_suggest_catches_typos(typo, expected):
+    assert features.find(typo) is None, "완전일치로 잡혔다면 추천이 필요 없는 입력이다"
+    assert features.suggest(typo)[0].key == expected
+
+
+def test_suggest_gives_up_on_unrelated_words():
+    """아무 상관 없는 말에까지 후보를 들이밀면 추천이 소음이 된다."""
+    assert features.suggest("짜장면") == []
+
+
+def test_suggestions_for_bare_open_subcommand():
+    """`/ieum 게임`처럼 이름을 안 적은 경우엔 되물을 후보가 없다(전체 선택기를 띄운다)."""
+    assert handlers.suggestions_for(parse_command("게임")) == []
+    assert handlers.suggestions_for(parse_command("게임 빙곰"))[0].key == "bingo"
+
+
+def test_feature_options_cover_slack_limit():
+    """external_select 응답은 100개가 상한이다 — 넘으면 슬랙이 통째로 거부한다."""
+    assert len(features.search("")) <= 100
 
 
 # ── ② 엔드포인트 왕복 ────────────────────────────────────────────────
