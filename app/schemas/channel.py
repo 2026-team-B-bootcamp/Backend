@@ -10,6 +10,12 @@ class ChannelCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
 
 
+class ChannelRenameRequest(BaseModel):
+    """채널 이름 변경 요청."""
+
+    name: str = Field(min_length=1, max_length=100)
+
+
 class ChannelResponse(BaseModel):
     id: int
     server_id: int
