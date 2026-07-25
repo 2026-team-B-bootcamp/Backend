@@ -9,7 +9,7 @@ import secrets
 import string
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.channel import Channel
@@ -123,6 +123,29 @@ async def rename_server(db: AsyncSession, server_id: int, name: str) -> Server:
     return server
 
 
+async def delete_server(db: AsyncSession, server_id: int, actor_id: int) -> None:
+    """모임을 통째로 지운다. 만든 사람만 할 수 있다.
+
+    이름 변경(rename_server)은 멤버 누구나 하지만 삭제는 만든 사람으로 좁힌다 —
+    내보내기(kick_member)와 같은 선이다. 되돌릴 수 없고, 실수 한 번의 피해가
+    본인이 아니라 모임 전체에 간다.
+
+    채널·메시지·멤버십·태그·슬랙 연동은 FK가 전부 ondelete=CASCADE로 걸려 있어
+    servers 행 하나를 지우면 DB가 알아서 걷어낸다. 여기서 손으로 지우지 않는
+    이유는 지울 대상이 늘 때마다 빠뜨릴 여지를 남기지 않기 위해서다.
+    """
+    server = await db.get(Server, server_id)
+    if server is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
+    if server.created_by != actor_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="모임을 만든 사람만 모임을 삭제할 수 있어요",
+        )
+    await db.delete(server)
+    await db.commit()
+
+
 async def rename_channel(
     db: AsyncSession, server_id: int, channel_id: int, name: str
 ) -> Channel:
@@ -141,6 +164,50 @@ async def rename_channel(
     return channel
 
 
+async def delete_channel(
+    db: AsyncSession, server_id: int, actor_id: int, channel_id: int
+) -> None:
+    """채널 하나를 지운다. 모임을 만든 사람만 할 수 있다.
+
+    이름 변경(rename_channel)은 멤버 누구나 하는데 삭제만 방장으로 좁히는 이유는,
+    채널이 사라지면 그 안의 대화가 통째로 같이 사라지기 때문이다. 되돌릴 수 없는
+    쪽은 만든 사람에게 맡긴다 — kick_member와 같은 기준이다.
+
+    메시지는 messages.channel_id가 ondelete=CASCADE라 DB가 함께 지운다.
+    메시지 삭제(message_service)가 소프트 삭제인 것과 다른데, 그쪽은 남은 메시지의
+    id 커서(무한 스크롤·재연결 보충)가 어긋나지 않게 하려는 것이고 채널이 통째로
+    사라지는 여기서는 지킬 커서 자체가 없다.
+    """
+    server = await db.get(Server, server_id)
+    if server is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
+    if server.created_by != actor_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="모임을 만든 사람만 채널을 삭제할 수 있어요",
+        )
+
+    # rename_channel과 같은 이유로 서버-채널 소유 관계를 대조한다 — 내가 방장인
+    # 서버 id에 남의 채널 id를 붙여 보내는 것을 막는다.
+    channel = await db.get(Channel, channel_id)
+    if channel is None or channel.server_id != server_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found")
+
+    # 마지막 하나는 남긴다. 채널이 0개가 되면 프런트가 갈 곳을 잃고 서버 목록으로
+    # 튕겨 나가는데, 그 모임은 그때부터 들어갈 수는 있어도 아무것도 없는 방이 된다.
+    remaining = await db.scalar(
+        select(func.count()).select_from(Channel).where(Channel.server_id == server_id)
+    )
+    if (remaining or 0) <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="마지막 채널은 삭제할 수 없어요",
+        )
+
+    await db.delete(channel)
+    await db.commit()
+
+
 async def kick_member(
     db: AsyncSession, server_id: int, actor_id: int, target_id: int
 ) -> None:
@@ -149,10 +216,7 @@ async def kick_member(
     이름 변경(rename_server)과 달리 권한을 만든 사람으로 좁힌다 — 되돌릴 수 없는
     쪽에 가깝고, 아무나 서로를 내보낼 수 있으면 그게 더 큰 사고다.
 
-    지우는 것은 멤버십과 이 서버의 관심사 태그까지다. 이미 남긴 메시지는 건드리지
-    않는다 — 대화 기록에 구멍이 나면 남은 사람들의 맥락이 끊긴다. 태그를 함께
-    지우는 이유는 tags 테이블이 서버 단위로만 묶여 있어(멤버십과 조인하지 않는다)
-    그대로 두면 나간 사람이 관심사 통계에 계속 잡히기 때문이다.
+    지우는 범위는 _remove_membership이 정한다 (스스로 나가는 leave_server와 같다).
 
     차단이 아니라 내보내기다 — 초대 코드를 아는 사람은 다시 들어올 수 있다.
     """
@@ -170,10 +234,44 @@ async def kick_member(
             detail="자기 자신은 내보낼 수 없어요",
         )
 
+    await _remove_membership(db, server_id, target_id)
+
+
+async def leave_server(db: AsyncSession, server_id: int, user_id: int) -> None:
+    """멤버가 스스로 모임에서 나간다.
+
+    내보내기(kick_member)와 지우는 범위는 같지만 권한은 정반대다 — 남을 내보내는
+    것은 방장만, 자기가 나가는 것은 누구나. 한 번 들어온 모임에서 스스로 빠져나올
+    방법이 없으면 방장이 내보내 줄 때까지 기다려야 한다.
+
+    방장만 예외로 막는다. 방장이 나가면 남은 사람 중 아무도 채널을 지우거나 멤버를
+    정리할 수 없는 모임이 되고, 그 상태를 되돌릴 방법이 없다. 소유권 넘기기를 만들기
+    전까지는 "모임을 삭제하라"고 안내하는 편이 정직하다.
+    """
+    server = await db.get(Server, server_id)
+    if server is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
+    if server.created_by == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="모임을 만든 사람은 나갈 수 없어요. 모임을 삭제해 주세요",
+        )
+    await _remove_membership(db, server_id, user_id)
+
+
+async def _remove_membership(db: AsyncSession, server_id: int, user_id: int) -> None:
+    """멤버십과 이 서버의 관심사 태그를 지운다 (내보내기·나가기 공용).
+
+    이미 남긴 메시지는 건드리지 않는다 — 대화 기록에 구멍이 나면 남은 사람들의
+    맥락이 끊긴다. 태그를 함께 지우는 이유는 tags 테이블이 서버 단위로만 묶여
+    있어(멤버십과 조인하지 않는다) 그대로 두면 떠난 사람이 관심사 통계에 계속
+    잡히기 때문이다. 두 경로가 같은 함수를 쓰는 것은 이 규칙이 한쪽에서만 바뀌는
+    일을 막기 위해서다.
+    """
     membership = await db.scalar(
         select(ServerMember).where(
             ServerMember.server_id == server_id,
-            ServerMember.user_id == target_id,
+            ServerMember.user_id == user_id,
         )
     )
     if membership is None:
@@ -183,7 +281,7 @@ async def kick_member(
 
     await db.delete(membership)
     tag = await db.scalar(
-        select(Tag).where(Tag.server_id == server_id, Tag.user_id == target_id)
+        select(Tag).where(Tag.server_id == server_id, Tag.user_id == user_id)
     )
     if tag is not None:
         await db.delete(tag)
