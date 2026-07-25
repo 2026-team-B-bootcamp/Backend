@@ -43,6 +43,7 @@ def _serialize(game: BingoGame, requester_id: int) -> BingoStateResponse:
             CallEntry(number=c.number, user_id=c.user_id, display_name=c.display_name)
             for c in game.call_log
         ],
+        host_user_id=game.host_user_id,
     )
 
 

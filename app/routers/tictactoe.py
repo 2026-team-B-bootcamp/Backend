@@ -42,6 +42,7 @@ def _serialize(game: TicTacToeGame) -> TicTacToeStateResponse:
         winner_user_id=game.winner_user_id,
         winning_line=game.winning_line,
         last_move=game.last_move,
+        host_user_id=game.host_user_id,
     )
 
 

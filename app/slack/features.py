@@ -83,3 +83,56 @@ def catalog_text() -> str:
     games = "  ".join(f"{f.emoji} {f.label}" for f in GAMES)
     tools = "  ".join(f"{f.emoji} {f.label}" for f in TOOLS)
     return f"*게임*  {games}\n*그 외*  {tools}"
+
+
+def search(query: str, limit: int = 100) -> list[Feature]:
+    """타이핑한 조각으로 기능을 좁힌다 — 선택기 타이핑 자동완성(external_select)용.
+
+    `find`가 완전일치만 보는 것과 달리 여기는 부분일치를 받는다. "빙"만 쳐도
+    빙고가 남아야 자동완성이라 할 수 있기 때문이다. 빈 문자열이면 전부 돌려준다
+    (선택기를 열자마자 목록이 보이게).
+
+    앞부분이 맞는 것을 먼저 둔다 — "오"를 쳤을 때 '오목'이 '초성퀴즈'(alias에
+    'chosung'이 있어 o를 포함)보다 위에 와야 자연스럽다.
+    """
+    q = query.strip().lower()
+    if not q:
+        return list(FEATURES)[:limit]
+
+    prefix: list[Feature] = []
+    contains: list[Feature] = []
+    for f in FEATURES:
+        # 사람에게 보이는 이름도 검색 대상이다 — alias에 없는 표기로 칠 수 있다.
+        candidates = (f.label.lower(), *(a.lower() for a in f.aliases))
+        if any(c.startswith(q) for c in candidates):
+            prefix.append(f)
+        elif any(q in c for c in candidates):
+            contains.append(f)
+    return (prefix + contains)[:limit]
+
+
+def suggest(word: str, limit: int = 3) -> list[Feature]:
+    """오타로 못 찾았을 때 "혹시 이거?"로 되물을 후보를 고른다.
+
+    부분일치(search)를 먼저 보고, 그래도 없으면 편집거리로 가까운 별칭을 찾는다.
+    '빙고게임'처럼 덧붙인 말은 부분일치가, '빙곰'처럼 한 글자 틀린 것은
+    편집거리가 잡아준다.
+    """
+    hits = search(word, limit)
+    if hits:
+        return hits
+
+    import difflib
+
+    # cutoff이 기본값(0.6)이면 '빙곰'↔'빙고'처럼 두 글자 중 한 글자만 틀려도
+    # 비율이 0.5라 떨어진다. 한국어 기능 이름은 2~4글자라 한 글자 오타의 비중이
+    # 크므로 기준을 낮춘다 — "혹시 이거?"로 되묻는 자리라 헛짚어도 손해가 적다.
+    close = difflib.get_close_matches(
+        word.strip().lower(), list(_BY_ALIAS.keys()), n=limit, cutoff=0.5
+    )
+    # 별칭 여러 개가 같은 기능을 가리킬 수 있으므로 중복을 없앤다(순서 유지).
+    seen: dict[str, Feature] = {}
+    for alias in close:
+        f = _BY_ALIAS[alias]
+        seen.setdefault(f.key, f)
+    return list(seen.values())

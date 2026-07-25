@@ -48,6 +48,7 @@ def _serialize(game: WordChainGame, store: WordChainStore) -> WordChainStateResp
         loser_user_id=game.loser_user_id,
         seconds_left=store.seconds_left(game),
         last_event=game.last_event,
+        host_user_id=game.host_user_id,
     )
 
 

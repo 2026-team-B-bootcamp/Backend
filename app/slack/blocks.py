@@ -11,6 +11,78 @@ JOIN_ACTION_ID = "ieum_join"
 # url 버튼도 누르면 인터랙션이 날아온다. 처리할 일은 없지만 받아서 ack해야
 # Bolt가 "unhandled request" 경고를 남기지 않는다.
 OPEN_LINK_ACTION_ID = "ieum_open_link"
+# 타이핑하면 후보가 좁혀지는 기능 선택기. @app.options(같은 id)가 후보를 채우고,
+# @app.action(같은 id)이 고른 결과를 받는다.
+FEATURE_SELECT_ACTION_ID = "ieum_feature_select"
+
+
+def feature_option(feature: Feature) -> dict:
+    """선택기 항목 하나. options 응답과 initial_option이 같은 모양을 써야 한다."""
+    return {
+        "text": {"type": "plain_text", "text": f"{feature.emoji} {feature.label}", "emoji": True},
+        "value": feature.key,
+    }
+
+
+def feature_pick_blocks(prompt: str = "무엇을 열까요?") -> list[dict]:
+    """이름을 타이핑하면 후보가 좁혀지는 기능 선택기.
+
+    슬랙은 슬래시 커맨드의 *인자*까지 자동완성해주지 않는다 — `/ieum` 까지는
+    슬랙이 채워주지만 그 뒤 "빙고"는 온전히 사용자가 외워서 쳐야 한다. 그래서
+    자동완성이 필요한 자리를 external_select로 옮겼다. min_query_length를 0으로
+    두면 열자마자 전체 목록이 뜨고, 글자를 칠수록 좁혀진다(=자동완성).
+
+    ⚠️ 앱 설정이 하나 더 필요하다: 슬랙은 타이핑할 때마다 block_suggestion을
+    Interactivity의 request_url이 아니라 **Options Load URL**
+    (매니페스트의 `settings.interactivity.message_menu_options_url`)로 보낸다.
+    비어 있으면 이 선택기는 "옵션을 불러오지 못했습니다"만 띄운다.
+    경로는 request_url과 같아도 된다 — Bolt가 페이로드 종류로 갈라준다.
+    """
+    return [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": prompt},
+            "accessory": {
+                "type": "external_select",
+                "action_id": FEATURE_SELECT_ACTION_ID,
+                "min_query_length": 0,
+                "placeholder": {"type": "plain_text", "text": "이름을 입력해 보세요"},
+            },
+        }
+    ]
+
+
+def suggestion_blocks(typed: str, features: tuple[Feature, ...] | list[Feature]) -> list[dict]:
+    """오타로 못 찾았을 때 "혹시 이거?"로 되묻는 버튼들.
+
+    모르는 명령에 도움말 전문을 통째로 던지면 정작 찾던 것은 그 안에 묻힌다.
+    가까운 후보를 눌러 바로 열 수 있게 한다.
+    """
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"`{typed}` 는 못 찾았어요. 혹시 이건가요?",
+            },
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": f"{f.emoji} {f.label}",
+                        "emoji": True,
+                    },
+                    "action_id": f"{JOIN_ACTION_ID}_{f.key}",
+                    "value": f.key,
+                }
+                for f in features
+            ],
+        },
+    ]
 
 
 def invite_blocks(feature: Feature, opener_user_id: str) -> list[dict]:

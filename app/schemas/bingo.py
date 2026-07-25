@@ -34,3 +34,5 @@ class BingoStateResponse(BaseModel):
     turn_user_id: int | None = None
     # 호출된 순서 그대로의 기록 (called_numbers는 정렬된 집합이라 순서를 알 수 없다).
     call_log: list[CallEntry] = []
+    # 이 판을 연 사람(방장). 이 사람만 강제 종료할 수 있다 (routers/games.py).
+    host_user_id: int | None = None
