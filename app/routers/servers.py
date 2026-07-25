@@ -145,6 +145,75 @@ async def rename_channel(
     return ChannelResponse(id=channel.id, server_id=channel.server_id, name=channel.name)
 
 
+@router.delete("/{server_id}/channels/{channel_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_channel(
+    server_id: int,
+    channel_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """방장이 채널 하나를 지운다. 권한 검사는 서비스가 한다."""
+    await server_service.delete_channel(db, server_id, current_user.id, channel_id)
+    # 이름 변경(channel.renamed)과 달리 그 채널에만 알리면 부족하다. 채널이 목록에서
+    # 사라지는 것은 이 서버에 접속한 모든 사람의 사이드바에 해당하는 변화이고,
+    # 지워진 채널에 있던 사람은 그 채널로 오는 알림을 받아봐야 갈 곳이 없다.
+    # 그래서 삭제 후 남은 채널들에 알린다 (지금 어디에 앉아 있든 닿는다).
+    for channel in await server_service.list_channels(db, server_id):
+        await hub.broadcast(
+            channel.id,
+            {
+                "type": "channel.deleted",
+                "payload": {"server_id": server_id, "channel_id": channel_id},
+            },
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.delete("/{server_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_server(
+    server_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """방장이 모임을 통째로 지운다. 권한 검사는 서비스가 한다."""
+    # 채널 목록을 삭제 *전에* 읽어 둔다 — 지운 뒤에는 어디로 알려야 할지 알 방법이
+    # 없다(채널이 CASCADE로 함께 사라진다). 내보내기와 같은 이유의 같은 순서다.
+    channels = await server_service.list_channels(db, server_id)
+    await server_service.delete_server(db, server_id, current_user.id)
+    for channel in channels:
+        await hub.broadcast(
+            channel.id,
+            {"type": "server.deleted", "payload": {"server_id": server_id}},
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# 이 라우트는 반드시 아래 kick_member(`/members/{user_id}`)보다 먼저 선언돼야 한다.
+# FastAPI는 먼저 등록된 경로부터 맞춰 보는데, 순서가 뒤집히면 "me"를 user_id(int)로
+# 파싱하려다 422가 난다.
+@router.delete("/{server_id}/members/me", status_code=status.HTTP_204_NO_CONTENT)
+async def leave_server(
+    server_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """멤버가 스스로 모임에서 나간다. 방장은 나갈 수 없다(서비스가 막는다)."""
+    # 내보내기와 같은 이유로 채널 목록을 나가기 전에 읽는다.
+    channels = await server_service.list_channels(db, server_id)
+    await server_service.leave_server(db, server_id, current_user.id)
+    # 내보내기와 같은 이벤트를 쓴다 — 받는 쪽에서 "누군가 이 모임에서 빠졌다"에
+    # 대해 할 일(본인은 목록으로, 남은 사람은 멤버 패널 갱신)이 완전히 같다.
+    for channel in channels:
+        await hub.broadcast(
+            channel.id,
+            {
+                "type": "server.member_removed",
+                "payload": {"server_id": server_id, "user_id": current_user.id},
+            },
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.delete("/{server_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def kick_member(
     server_id: int,
