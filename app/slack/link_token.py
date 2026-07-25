@@ -31,8 +31,5 @@ def build_entry_link(user: User, channel: Channel, feature: Feature) -> str:
         str(user.id), user.token_version, expire_minutes=LINK_TOKEN_EXPIRE_MINUTES
     )
     base = settings.public_web_url.rstrip("/")
-    path = f"{base}/servers/{channel.server_id}/channels/{channel.id}"
-    # 전용 화면이 없는 항목(채팅)은 채널 화면 자체가 목적지다.
-    if feature.page:
-        path += f"/play/{feature.page}"
+    path = f"{base}/servers/{channel.server_id}/channels/{channel.id}/play/{feature.page}"
     return f"{path}?{urlencode({'t': token})}"

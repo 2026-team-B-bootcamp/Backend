@@ -16,8 +16,11 @@ from dataclasses import dataclass
 from slack_bolt.async_app import AsyncApp
 
 from app.db import base as db_base
+from app.services import tag_service
+from app.services.ai import service as ai_service
+from app.services.ai.provider import get_icebreaker_provider
 from app.slack import blocks, mirror
-from app.slack.features import Feature, by_key, catalog_text, find
+from app.slack.features import Feature, by_key, catalog_text, find, search, suggest
 from app.slack.link_token import build_entry_link
 
 logger = logging.getLogger(__name__)
@@ -36,14 +39,29 @@ _ALIASES: dict[str, str] = {
     "게임": "open",
     "열기": "open",
     "시작": "open",
+    # 슬랙 안에서 끝나는 것들 — 웹으로 내보내지 않는다
+    "태그등록": "tag_edit",
+    "관심사등록": "tag_edit",
+    "내태그": "tag_edit",
+    "태그": "tag_view",
+    "관심사": "tag_view",
+    "말걸어줘": "icebreaker",
+    "질문": "icebreaker",
+    "아이스브레이커": "icebreaker",
 }
 
 HELP_TEXT = (
     "*이음* — 관심사 태그로 빠르게 친해지는 아이스브레이킹 봇\n\n"
-    "• `/ieum 목록` — 열 수 있는 것 전부 버튼으로 보기\n"
-    "• `/ieum 게임 빙고` — 채널에 참여 버튼을 띄운다\n"
-    "• `/ieum 같이보기` — 바로 이름을 불러도 된다\n"
-    "• `/ieum 핑` — 봇이 살아있는지 확인\n\n" + catalog_text()
+    "*슬랙에서 바로*\n"
+    "• `/ieum 태그등록` — 내 관심사 적기\n"
+    "• `/ieum 태그` — 누군가의 관심사 보기\n"
+    "• `/ieum 말걸어줘` — AI가 말 걸 질문을 만들어줌\n\n"
+    "*웹에서 같이 하기* (버튼 → 개인 입장 링크)\n"
+    "• `/ieum 목록` — 아래 것들을 버튼으로\n"
+    "• `/ieum 게임` — 이름을 타이핑하면 후보가 좁혀지는 선택기\n"
+    "• `/ieum 게임 빙고` · `/ieum 같이보기` — 이름만 불러도 된다\n\n"
+    + catalog_text()
+    + "\n\n• `/ieum 핑` — 봇이 살아있는지 확인"
 )
 
 
@@ -89,6 +107,16 @@ def unknown_reply(parsed: ParsedCommand) -> str:
     if parsed.name == "open" and not parsed.args:
         return f"무엇을 열까요? 예: `/ieum 게임 빙고`\n\n{catalog_text()}"
     return f"모르는 명령이에요: `{parsed.raw}`\n\n{HELP_TEXT}"
+
+
+def suggestions_for(parsed: ParsedCommand) -> list[Feature]:
+    """모르는 입력에 대해 "혹시 이거?"로 되물을 후보들.
+
+    `게임`처럼 서브커맨드만 치고 만 경우엔 되물을 것이 없다(전체 선택기를 띄운다).
+    """
+    if parsed.name == "open":
+        return suggest(parsed.args) if parsed.args else []
+    return suggest(parsed.raw)
 
 
 async def _display_name(client, user_id: str, fallback: str) -> str:
@@ -141,11 +169,40 @@ async def _issue_entry_link(client, body: dict, feature: Feature) -> str:
         return build_entry_link(ieum_user, ieum_channel, feature)
 
 
+async def _resolve_target(client, team: dict, channel: dict, slack_user_id: str):
+    """슬랙 유저 하나를 이음 계정·채널로 옮긴다.
+
+    대상이 아직 이음 계정이 없을 수도 있다(봇을 한 번도 안 쓴 사람). 그 경우에도
+    게스트를 만들어 매핑해둔다 — 그래야 그 사람 태그를 나중에 붙일 자리가 생긴다.
+    """
+    display_name = await _display_name(client, slack_user_id, "")
+    async with db_base.async_session_maker() as db:
+        user, ieum_channel = await mirror.ensure_context(
+            db,
+            team_id=team.get("id", ""),
+            team_name=team.get("domain"),
+            slack_channel_id=channel.get("id", ""),
+            channel_name=channel.get("name") or "슬랙",
+            slack_user_id=slack_user_id,
+            display_name=display_name,
+        )
+        await db.commit()
+        return user.id, user.display_name, ieum_channel.server_id
+
+
+async def _load_tags(server_id: int, user_id: int) -> list[str]:
+    async with db_base.async_session_maker() as db:
+        tag = await tag_service.get_user_tags(db, server_id, user_id)
+        if tag is None:
+            return []
+        return [t for t in tag_service.tag_values(tag) if t and t.strip()]
+
+
 def register(app: AsyncApp) -> None:
     """Bolt 앱에 핸들러를 붙인다."""
 
     @app.command("/ieum")
-    async def handle_ieum(ack, command) -> None:
+    async def handle_ieum(ack, command, client) -> None:
         parsed = parse_command(command.get("text"))
 
         if parsed.name == "ping":
@@ -158,8 +215,52 @@ def register(app: AsyncApp) -> None:
             await ack(blocks=blocks.catalog_blocks(), text="열 수 있는 것들")
             return
 
+        # 태그 등록은 모달이다. trigger_id는 3초 만에 만료되므로 다른 일을 하기 전에
+        # 곧바로 views.open을 호출한다 — DB부터 다녀오면 그 사이에 만료된다.
+        if parsed.name == "tag_edit":
+            await ack()
+            await client.views_open(
+                trigger_id=command["trigger_id"],
+                view=blocks.tag_modal(command.get("channel_id", "")),
+            )
+            return
+
+        # 남의 태그 보기 / AI 질문 — 둘 다 "누구를?"부터 물어야 한다.
+        if parsed.name == "tag_view":
+            await ack(
+                blocks=blocks.user_pick_blocks(
+                    blocks.PICK_TAGS_ACTION_ID, "누구의 관심사를 볼까요?"
+                ),
+                text="사람 고르기",
+            )
+            return
+        if parsed.name == "icebreaker":
+            await ack(
+                blocks=blocks.user_pick_blocks(
+                    blocks.PICK_ICEBREAKER_ACTION_ID, "누구에게 말을 걸어볼까요?"
+                ),
+                text="사람 고르기",
+            )
+            return
+
         feature = resolve_feature(parsed)
         if feature is None:
+            # 이름을 안 적었으면(`/ieum 게임`) 타이핑 자동완성 선택기를 띄우고,
+            # 뭔가 적었는데 못 찾았으면 가까운 후보를 버튼으로 되묻는다.
+            # 도움말 전문을 던지는 것은 둘 다 아닐 때의 마지막 수단이다.
+            if parsed.name == "open" and not parsed.args:
+                await ack(
+                    blocks=blocks.feature_pick_blocks(),
+                    text="무엇을 열까요?",
+                )
+                return
+            near = suggestions_for(parsed)
+            if near:
+                await ack(
+                    blocks=blocks.suggestion_blocks(parsed.raw, near),
+                    text="비슷한 것을 찾았어요",
+                )
+                return
             await ack(text=unknown_reply(parsed))
             return
 
@@ -169,6 +270,43 @@ def register(app: AsyncApp) -> None:
             text=f"{feature.label} 열림",
             response_type="in_channel",
         )
+
+    @app.options(blocks.FEATURE_SELECT_ACTION_ID)
+    async def handle_feature_options(ack, payload) -> None:
+        """선택기에 타이핑할 때마다 슬랙이 후보를 물어온다 — 그 응답.
+
+        슬랙은 3초 안에 답을 못 받으면 "옵션을 불러오지 못했습니다"를 띄우므로
+        DB·네트워크를 타지 않고 메모리의 카탈로그(features.py)만 읽는다.
+        """
+        typed = (payload or {}).get("value", "")
+        await ack(options=[blocks.feature_option(f) for f in search(typed)])
+
+    @app.action(blocks.FEATURE_SELECT_ACTION_ID)
+    async def handle_feature_selected(ack, body, client, respond) -> None:
+        """선택기에서 고른 기능을 채널 초대 메시지로 연다."""
+        await ack()
+        selected = (body.get("actions") or [{}])[0].get("selected_option") or {}
+        feature = by_key(selected.get("value", ""))
+        if feature is None:
+            await respond(text="알 수 없는 항목이에요. `/ieum 목록`으로 다시 시도해주세요.")
+            return
+
+        channel_id = (body.get("channel") or {}).get("id", "")
+        user_id = (body.get("user") or {}).get("id", "")
+        try:
+            # 선택기는 나에게만 보이는 메시지 안에 있다. 초대는 채널 전체가 봐야
+            # 하므로 응답을 고쳐 쓰는 대신 채널에 새 메시지를 올린다.
+            await client.chat_postMessage(
+                channel=channel_id,
+                blocks=blocks.invite_blocks(feature, user_id),
+                text=f"{feature.label} 열림",
+            )
+        except Exception:
+            logger.exception("선택기에서 연 초대 메시지 게시 실패 feature=%s", feature.key)
+            await respond(text="열지 못했어요. 잠시 후 다시 시도해주세요.")
+            return
+        # 역할을 다한 선택기는 치운다 — 남겨두면 같은 걸 또 여는 실수를 부른다.
+        await respond(text=f"{feature.emoji} {feature.label} 열었어요!", replace_original=True)
 
     # 초대 메시지는 `ieum_join` 하나지만, `/ieum 목록`은 버튼이 여러 개라
     # `ieum_join_<기능>`으로 갈린다 (한 메시지 안에서 action_id가 겹치면 안 된다).
@@ -194,6 +332,99 @@ def register(app: AsyncApp) -> None:
             blocks=blocks.entry_link_blocks(feature, link),
             text=f"{feature.label} 입장 링크",
             replace_original=False,
+        )
+
+    @app.view(blocks.TAG_MODAL_CALLBACK_ID)
+    async def handle_tag_submit(ack, body, view, client) -> None:
+        values = view["state"]["values"]
+        tags = [
+            (values.get(field, {}).get("value", {}).get("value") or "").strip()[:40]
+            for field, _, _ in blocks.TAG_FIELDS
+        ]
+        slack_user_id = body["user"]["id"]
+        # 모달에는 채널이 실려오지 않아 열 때 private_metadata에 담아뒀다.
+        channel_id = view.get("private_metadata") or ""
+
+        try:
+            user_id, _, server_id = await _resolve_target(
+                client, body.get("team") or {}, {"id": channel_id}, slack_user_id
+            )
+            async with db_base.async_session_maker() as db:
+                await tag_service.upsert_tags(db, server_id, user_id, *tags)
+        except Exception:
+            logger.exception("태그 저장 실패 user=%s", slack_user_id)
+            # 모달 위에 그대로 에러를 띄운다 — 닫아버리면 적은 내용이 날아간다.
+            await ack(
+                response_action="errors",
+                errors={"tag1": "저장에 실패했어요. 잠시 후 다시 시도해주세요."},
+            )
+            return
+
+        await ack()
+        saved = [t for t in tags if t]
+        text = (
+            "관심사를 저장했어요: " + "  ".join(f"`{t}`" for t in saved)
+            if saved
+            else "관심사를 모두 지웠어요."
+        )
+        # 모달은 채널 맥락이 없어 respond()를 못 쓴다. 본인에게 DM으로 알린다.
+        try:
+            await client.chat_postEphemeral(
+                channel=channel_id, user=slack_user_id, text=text
+            )
+        except Exception:
+            logger.warning("태그 저장 알림 실패 — 저장 자체는 됐다", exc_info=True)
+
+    @app.action(blocks.PICK_TAGS_ACTION_ID)
+    async def handle_pick_tags(ack, body, client, respond) -> None:
+        await ack()
+        target = body["actions"][0]["selected_user"]
+        me = body["user"]["id"]
+        try:
+            user_id, name, server_id = await _resolve_target(
+                client, body.get("team") or {}, body.get("channel") or {}, target
+            )
+            tags = await _load_tags(server_id, user_id)
+        except Exception:
+            logger.exception("태그 조회 실패 target=%s", target)
+            await respond(text="관심사를 불러오지 못했어요. 잠시 후 다시 시도해주세요.")
+            return
+        await respond(
+            blocks=blocks.tags_card_blocks(name, tags, mine=target == me),
+            text=f"{name} 님의 관심사",
+            replace_original=True,
+        )
+
+    @app.action(blocks.PICK_ICEBREAKER_ACTION_ID)
+    async def handle_pick_icebreaker(ack, body, client, respond) -> None:
+        # AI 호출은 몇 초가 걸린다. 먼저 ack해서 슬랙의 3초 재전송을 막는다.
+        await ack()
+        target = body["actions"][0]["selected_user"]
+        try:
+            user_id, name, server_id = await _resolve_target(
+                client, body.get("team") or {}, body.get("channel") or {}, target
+            )
+            tags = await _load_tags(server_id, user_id)
+        except Exception:
+            logger.exception("아이스브레이커 대상 조회 실패 target=%s", target)
+            await respond(text="질문을 만들지 못했어요. 잠시 후 다시 시도해주세요.")
+            return
+
+        questions: list[str] = []
+        if tags:
+            try:
+                questions = await ai_service.get_icebreakers(
+                    get_icebreaker_provider(), name, tags
+                )
+            except Exception:
+                logger.exception("아이스브레이커 생성 실패")
+                await respond(text="AI가 질문을 만들지 못했어요. 잠시 후 다시 시도해주세요.")
+                return
+
+        await respond(
+            blocks=blocks.icebreaker_blocks(name, questions),
+            text=f"{name} 님에게 말 걸기",
+            replace_original=True,
         )
 
     @app.action(blocks.OPEN_LINK_ACTION_ID)

@@ -278,26 +278,12 @@ async def test_expired_link_is_rejected(client, db_engine, monkeypatch):
 # ── 전용 화면 경로 규칙 ──────────────────────────────────────────────
 
 
-async def test_tags_link_goes_to_tag_page(db):
-    """태그 등록도 슬랙에서 바로 열 수 있어야 한다."""
-    user, channel = await _context(db)
-    link = build_entry_link(user, channel, by_key("tags"))
-    assert urlparse(link).path.endswith("/play/tags")
-
-
-async def test_chat_link_has_no_play_segment(db):
-    """채팅은 전용 화면이 없다 — 채널 화면 자체가 목적지다."""
-    user, channel = await _context(db)
-    link = build_entry_link(user, channel, by_key("chat"))
-    path = urlparse(link).path
-    assert path == f"/servers/{channel.server_id}/channels/{channel.id}"
-    assert "/play/" not in path
 
 
 async def test_token_never_leaks_into_the_path(db):
     """토큰은 쿼리에만 있어야 한다 — 경로에 섞이면 서버 접근 로그에 그대로 남는다."""
     user, channel = await _context(db)
-    for feature_key in ("bingo", "watch", "tags", "chat"):
+    for feature_key in ("bingo", "watch", "draw", "omok"):
         link = build_entry_link(user, channel, by_key(feature_key))
         parsed = urlparse(link)
         assert "t=" not in parsed.path

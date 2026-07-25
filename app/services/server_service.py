@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.channel import Channel
 from app.models.server import Server, ServerMember
+from app.models.tag import Tag
 
 _ALPHABET = string.ascii_uppercase + string.digits
 
@@ -104,6 +105,89 @@ async def create_channel(db: AsyncSession, server_id: int, name: str) -> Channel
     await db.commit()
     await db.refresh(channel)
     return channel
+
+
+async def rename_server(db: AsyncSession, server_id: int, name: str) -> Server:
+    """서버 이름을 바꾼다. 호출부가 멤버십을 먼저 확인한 뒤 부른다.
+
+    권한을 만든 사람으로 좁히지 않는 이유: 채널 생성(create_channel)도 멤버면
+    누구나 할 수 있고, 이 서비스의 서버는 소수의 아는 사람이 쓰는 모임방이라
+    '이름이 어색하면 아무나 고친다'가 실제 사용에 맞는다.
+    """
+    server = await db.get(Server, server_id)
+    if server is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
+    server.name = name
+    await db.commit()
+    await db.refresh(server)
+    return server
+
+
+async def rename_channel(
+    db: AsyncSession, server_id: int, channel_id: int, name: str
+) -> Channel:
+    """채널 이름을 바꾼다.
+
+    channel_id만 받으면 다른 서버의 채널 id를 넣어 남의 채널 이름을 바꿀 수 있다.
+    호출부가 확인한 멤버십은 server_id에 대한 것이므로, 그 채널이 정말 이 서버의
+    것인지 여기서 한 번 더 대조한다.
+    """
+    channel = await db.get(Channel, channel_id)
+    if channel is None or channel.server_id != server_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Channel not found")
+    channel.name = name
+    await db.commit()
+    await db.refresh(channel)
+    return channel
+
+
+async def kick_member(
+    db: AsyncSession, server_id: int, actor_id: int, target_id: int
+) -> None:
+    """모임을 만든 사람이 멤버 한 명을 내보낸다.
+
+    이름 변경(rename_server)과 달리 권한을 만든 사람으로 좁힌다 — 되돌릴 수 없는
+    쪽에 가깝고, 아무나 서로를 내보낼 수 있으면 그게 더 큰 사고다.
+
+    지우는 것은 멤버십과 이 서버의 관심사 태그까지다. 이미 남긴 메시지는 건드리지
+    않는다 — 대화 기록에 구멍이 나면 남은 사람들의 맥락이 끊긴다. 태그를 함께
+    지우는 이유는 tags 테이블이 서버 단위로만 묶여 있어(멤버십과 조인하지 않는다)
+    그대로 두면 나간 사람이 관심사 통계에 계속 잡히기 때문이다.
+
+    차단이 아니라 내보내기다 — 초대 코드를 아는 사람은 다시 들어올 수 있다.
+    """
+    server = await db.get(Server, server_id)
+    if server is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Server not found")
+    if server.created_by != actor_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="모임을 만든 사람만 멤버를 내보낼 수 있어요",
+        )
+    if target_id == actor_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="자기 자신은 내보낼 수 없어요",
+        )
+
+    membership = await db.scalar(
+        select(ServerMember).where(
+            ServerMember.server_id == server_id,
+            ServerMember.user_id == target_id,
+        )
+    )
+    if membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="이 모임의 멤버가 아니에요"
+        )
+
+    await db.delete(membership)
+    tag = await db.scalar(
+        select(Tag).where(Tag.server_id == server_id, Tag.user_id == target_id)
+    )
+    if tag is not None:
+        await db.delete(tag)
+    await db.commit()
 
 
 async def require_channel_access(

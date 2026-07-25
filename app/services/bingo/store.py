@@ -47,6 +47,9 @@ class BingoGame:
     channel_id: int
     # 대기(2명 모으는 중) → 진행 → 종료. 진행 중엔 새 참가 불가(관전만).
     status: str = WAITING
+    # 이 판을 연 사람(방장). 강제 종료 권한의 기준이며, 새 라운드가 열릴 때마다
+    # 그 라운드를 다시 연 사람으로 바뀐다 (game_host.py 참고).
+    host_user_id: int | None = None
     called_numbers: set[int] = field(default_factory=set)
     players: dict[int, BingoPlayer] = field(default_factory=dict)
     winner_user_id: int | None = None
@@ -80,6 +83,8 @@ def _from_json(raw: str) -> BingoGame:
     data["call_log"] = [BingoCall(**c) for c in data.get("call_log", [])]
     data.setdefault("turn_order", [])
     data.setdefault("turn_index", 0)
+    # 방장 도입 이전에 저장된 판에는 이 키가 없다 — 없으면 방장 없는 판으로 둔다.
+    data.setdefault("host_user_id", None)
     return BingoGame(**data)
 
 
@@ -125,12 +130,16 @@ class BingoGameStore:
                 game.turn_index = 0
                 game.call_log = []
                 game.round += 1
+                # 새 라운드를 연 사람이 그 판의 방장이 된다.
+                game.host_user_id = None
             # 진행 중이면 새 참가 불가 — 관전만 (이미 참가자는 그대로 통과해 상태만 받는다).
             if game.status == PLAYING and user_id not in game.players:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="이미 진행 중이에요. 관전만 할 수 있어요",
                 )
+            if game.host_user_id is None:
+                game.host_user_id = user_id
             if user_id not in game.players:
                 # 처음 참가하는 유저에게만 새 보드를 발급한다 (재접속 시 기존 보드 유지).
                 game.players[user_id] = BingoPlayer(
@@ -226,6 +235,14 @@ class BingoGameStore:
         # 관전 유도용 상태: 없음 / 대기 / 진행중 / 종료
         game = await self._load(channel_id)
         return game.status if game else "none"
+
+    async def host(self, channel_id: int) -> int | None:
+        game = await self._load(channel_id)
+        return game.host_user_id if game else None
+
+    async def clear(self, channel_id: int) -> None:
+        """판을 통째로 지운다 — 방장의 강제 종료용(games 라우터가 호출)."""
+        await get_redis().delete(self._key(channel_id))
 
 
 store = BingoGameStore()

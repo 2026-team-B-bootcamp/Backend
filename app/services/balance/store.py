@@ -137,6 +137,14 @@ class BalanceStore:
     async def reset(self, channel_id: int) -> None:
         await get_redis().delete(self._key(channel_id))
 
+    async def host(self, channel_id: int) -> int | None:
+        game = await self._load(channel_id)
+        return game.host_user_id if game else None
+
+    async def clear(self, channel_id: int) -> None:
+        """판을 통째로 지운다 — 방장의 강제 종료용(games 라우터가 호출)."""
+        await get_redis().delete(self._key(channel_id))
+
     async def status(self, channel_id: int) -> str:
         game = await self._load(channel_id)
         if game is None:
