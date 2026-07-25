@@ -74,6 +74,9 @@ class OmokPlayer:
 class OmokGame:
     channel_id: int
     status: str = WAITING
+    # 이 판을 연 사람(방장). 강제 종료 권한의 기준이며, 새 라운드가 열릴 때마다
+    # 그 라운드를 다시 연 사람으로 바뀐다 (game_host.py 참고).
+    host_user_id: int | None = None
     players: list[OmokPlayer] = field(default_factory=list)
     board: list[list[int]] = field(default_factory=_empty_board)
     turn: int = BLACK
@@ -109,6 +112,8 @@ def _to_json(game: OmokGame) -> str:
 def _from_json(raw: str) -> OmokGame:
     data = json.loads(raw)
     data["players"] = [OmokPlayer(**p) for p in data["players"]]
+    # 방장 도입 이전에 저장된 판에는 이 키가 없다 — 없으면 방장 없는 판으로 둔다.
+    data.setdefault("host_user_id", None)
     return OmokGame(**data)
 
 
@@ -152,6 +157,10 @@ class OmokStore:
                 # 끝난 판에 다시 들어오면 판을 비우고 새 라운드를 연다.
                 game._reset_board()
                 game.status = PLAYING if len(game.players) >= 2 else WAITING
+
+            # 재대국에서도 두 사람이 그대로 남으므로 방장은 처음 판을 연 사람으로 유지된다.
+            if game.host_user_id is None:
+                game.host_user_id = user_id
 
             if game.find_player(user_id) is None:
                 if len(game.players) >= 2:
@@ -236,6 +245,14 @@ class OmokStore:
     async def status(self, channel_id: int) -> str:
         game = await self._load(channel_id)
         return game.status if game else "none"
+
+    async def host(self, channel_id: int) -> int | None:
+        game = await self._load(channel_id)
+        return game.host_user_id if game else None
+
+    async def clear(self, channel_id: int) -> None:
+        """판을 통째로 지운다 — 방장의 강제 종료용(games 라우터가 호출)."""
+        await get_redis().delete(self._key(channel_id))
 
 
 store = OmokStore()

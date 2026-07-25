@@ -44,6 +44,9 @@ class ChosungPlayer:
 class ChosungGame:
     channel_id: int
     status: str = WAITING
+    # 이 판을 연 사람(방장). 강제 종료 권한의 기준이며, 새 라운드가 열릴 때마다
+    # 그 라운드를 다시 연 사람으로 바뀐다 (game_host.py 참고).
+    host_user_id: int | None = None
     # 몇 번째 판인지. 끝난 판에 다시 들어와 새 대기실이 열릴 때 1씩 올라간다.
     round: int = 1
     players: list[ChosungPlayer] = field(default_factory=list)
@@ -77,6 +80,8 @@ def _from_json(raw: str) -> ChosungGame:
     data = json.loads(raw)
     data["players"] = [ChosungPlayer(**p) for p in data["players"]]
     data["used"] = set(data["used"])
+    # 방장 도입 이전에 저장된 판에는 이 키가 없다 — 없으면 방장 없는 판으로 둔다.
+    data.setdefault("host_user_id", None)
     return ChosungGame(**data)
 
 
@@ -162,11 +167,15 @@ class ChosungStore:
                 game.loser_user_id = None
                 game.last_event = None
                 game.fuse_deadline = None
+                # 새 라운드를 연 사람이 그 판의 방장이 된다.
+                game.host_user_id = None
             if game.status == PLAYING and game.find_player(user_id) is None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="게임이 이미 진행 중이에요. 다음 라운드에 참여하세요",
                 )
+            if game.host_user_id is None:
+                game.host_user_id = user_id
             if game.find_player(user_id) is None:
                 game.players.append(ChosungPlayer(user_id=user_id, display_name=display_name))
             await self._save(game)
@@ -274,6 +283,14 @@ class ChosungStore:
         # 지연 타임아웃을 반영해 정확한 상태를 계산한다(저장은 하지 않음 — 표시용)
         self._apply_timeout(game, self._clock())
         return game.status
+
+    async def host(self, channel_id: int) -> int | None:
+        game = await self._load(channel_id)
+        return game.host_user_id if game else None
+
+    async def clear(self, channel_id: int) -> None:
+        """판을 통째로 지운다 — 방장의 강제 종료용(games 라우터가 호출)."""
+        await get_redis().delete(self._key(channel_id))
 
 
 store = ChosungStore()

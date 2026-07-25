@@ -23,3 +23,5 @@ class OmokStateResponse(BaseModel):
     winner_user_id: int | None
     winning_line: list[list[int]] | None
     last_move: list[int] | None
+    # 이 판을 연 사람(방장). 이 사람만 강제 종료할 수 있다 (routers/games.py).
+    host_user_id: int | None = None
