@@ -1,10 +1,8 @@
 """밸런스게임(게시글형 토론 + 제한시간) API 라우터.
 
-요청 흐름: 클라이언트 → 이 라우터 → game_registry(채널 게임 잠금) → balance store
-→ 상태 직렬화 응답 + realtime hub로 브로드캐스트.
-제한시간이 끝나면(finished) 조회 시 registry 잠금을 느슨하게 해제해(idempotent) 다른 게임이
-열릴 수 있게 한다. 개인별 투표(my_vote)는 브로드캐스트엔 싣지 않고,
-각 클라이언트가 자기 값을 유지한다.
+요청 흐름: 클라이언트 → 이 라우터 → balance store → 상태 직렬화 응답 + realtime hub로
+브로드캐스트. 개인별 투표(my_vote)는 브로드캐스트엔 싣지 않고, 각 클라이언트가
+자기 값을 유지한다.
 """
 
 import time
@@ -25,7 +23,6 @@ from app.schemas.balance import (
 )
 from app.services import game_announce, server_service
 from app.services.balance.store import BalanceGame, BalanceStore, get_balance_store
-from app.services.game_registry import GameRegistry, get_game_registry
 from app.services.realtime import hub
 
 router = APIRouter(prefix="/channels", tags=["balance"])
@@ -68,10 +65,8 @@ async def start_balance(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     store: BalanceStore = Depends(get_balance_store),
-    registry: GameRegistry = Depends(get_game_registry),
 ) -> BalanceStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
-    await registry.acquire(channel_id, "balance")
     # 게임이 없던 채널이면 이 참가가 새 판을 여는 것이다 — 채팅만 보고 있던
     # 사람에게도 보이도록 입장 카드를 남긴다. 참가한 뒤에 판정하면 이미 waiting
     # 상태라 "새로 열린 것"인지 "이미 있던 판에 낀 것"인지 구분할 수 없다.
@@ -124,11 +119,9 @@ async def reset_balance(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     store: BalanceStore = Depends(get_balance_store),
-    registry: GameRegistry = Depends(get_game_registry),
 ) -> BalanceStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
     await store.reset(channel_id)
-    await registry.release(channel_id, "balance")
     await hub.broadcast(channel_id, {"type": "balance.state", "payload": _INACTIVE.model_dump()})
     return _INACTIVE
 
@@ -139,7 +132,6 @@ async def get_balance(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     store: BalanceStore = Depends(get_balance_store),
-    registry: GameRegistry = Depends(get_game_registry),
 ) -> BalanceStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
     game = await store.get(channel_id)
@@ -148,7 +140,4 @@ async def get_balance(
             status_code=status.HTTP_404_NOT_FOUND, detail="진행 중인 게임이 없어요"
         )
     now = time.time()
-    # 제한시간이 끝났으면 채널 게임 잠금을 풀어 다른 게임이 열릴 수 있게 한다(idempotent).
-    if game.is_finished(now):
-        await registry.release(channel_id, "balance")
     return _serialize(game, current_user.id, now)

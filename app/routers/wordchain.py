@@ -17,10 +17,8 @@ from app.schemas.wordchain import (
     WordSubmitRequest,
 )
 from app.services import game_announce, server_service
-from app.services.game_registry import GameRegistry, get_game_registry
 from app.services.realtime import hub
 from app.services.wordchain.store import (
-    FINISHED,
     WordChainGame,
     WordChainStore,
     get_wordchain_store,
@@ -65,11 +63,8 @@ async def join_wordchain(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     store: WordChainStore = Depends(get_wordchain_store),
-    registry: GameRegistry = Depends(get_game_registry),
 ) -> WordChainStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
-    # 이 채널에서 끝말잇기를 쓰겠다고 게임 레지스트리에 선점 등록 후, 대기실에 플레이어로 합류.
-    await registry.acquire(channel_id, "wordchain")
     # 게임이 없던 채널이면 이 참가가 새 판을 여는 것이다 — 채팅만 보고 있던
     # 사람에게도 보이도록 입장 카드를 남긴다. 참가한 뒤에 판정하면 이미 waiting
     # 상태라 "새로 열린 것"인지 "이미 있던 판에 낀 것"인지 구분할 수 없다.
@@ -103,14 +98,10 @@ async def submit_word(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     store: WordChainStore = Depends(get_wordchain_store),
-    registry: GameRegistry = Depends(get_game_registry),
 ) -> WordChainStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
     # 단어 검증(끝글자 잇기, 중복 여부 등)과 다음 차례 전환은 store.submit 안에서 처리된다.
     game = await store.submit(channel_id, current_user.id, payload.word)
-    if game.status == FINISHED:
-        # 게임이 끝나면 채널을 다른 게임에게 내준다.
-        await registry.release(channel_id, "wordchain")
     state = _serialize(game, store)
     await _broadcast_state(channel_id, state)
     return state
@@ -122,7 +113,6 @@ async def get_wordchain(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     store: WordChainStore = Depends(get_wordchain_store),
-    registry: GameRegistry = Depends(get_game_registry),
 ) -> WordChainStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
     game, changed = await store.get(channel_id)
@@ -133,7 +123,5 @@ async def get_wordchain(
     state = _serialize(game, store)
     if changed:
         # 타임아웃이 지연 판정으로 방금 반영됐으면 모두에게 알린다.
-        if game.status == FINISHED:
-            await registry.release(channel_id, "wordchain")
         await _broadcast_state(channel_id, state)
     return state

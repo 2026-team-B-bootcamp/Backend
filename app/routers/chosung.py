@@ -2,8 +2,7 @@
 
 요청 흐름: 클라이언트 → 이 라우터 → ChosungStore(상태 저장/전이) →
 ChosungStateResponse로 변환해 응답 + 웹소켓으로 전원에게 브로드캐스트.
-초성 일치 검사 자체는 services/chosung/logic.py에 있다. 끝말잇기 라우터와
-같은 구조지만 게임 레지스트리는 쓰지 않는다(각 게임이 채널에서 독립적으로 열림).
+초성 일치 검사 자체는 services/chosung/logic.py에 있다. 끝말잇기 라우터와 같은 구조다.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
