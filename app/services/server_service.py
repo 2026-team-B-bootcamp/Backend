@@ -82,6 +82,15 @@ async def require_membership(db: AsyncSession, server_id: int, user_id: int) -> 
         )
 
 
+async def get_owner_id(db: AsyncSession, server_id: int) -> int | None:
+    """서버를 만든 사람(id)을 돌려준다. 서버가 없으면 None.
+
+    멤버 목록(list_members)에서 각 멤버가 방장인지(is_owner) 표시할 때 쓴다.
+    """
+    server = await db.get(Server, server_id)
+    return server.created_by if server else None
+
+
 async def list_user_servers(db: AsyncSession, user_id: int) -> list[Server]:
     result = await db.scalars(
         select(Server)
