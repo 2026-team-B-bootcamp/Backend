@@ -1,8 +1,7 @@
 """틱택토(3×3, 1:1) 미니게임 API 라우터.
 
-요청 흐름: 클라이언트 → 이 라우터 → game_registry(채널당 게임 종류 잠금)
-→ tictactoe store → 상태 직렬화 응답 + realtime hub로 채널 전체에 브로드캐스트.
-오목 라우터와 동일한 구조다.
+요청 흐름: 클라이언트 → 이 라우터 → tictactoe store → 상태 직렬화 응답 + realtime hub로
+채널 전체에 브로드캐스트. 오목 라우터와 동일한 구조다.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -16,7 +15,6 @@ from app.schemas.tictactoe import (
     TicTacToeStateResponse,
 )
 from app.services import game_announce, server_service
-from app.services.game_registry import GameRegistry, get_game_registry
 from app.services.realtime import hub
 from app.services.tictactoe.store import (
     PLAYING,
@@ -56,10 +54,8 @@ async def join_tictactoe(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     store: TicTacToeStore = Depends(get_tictactoe_store),
-    registry: GameRegistry = Depends(get_game_registry),
 ) -> TicTacToeStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
-    await registry.acquire(channel_id, "tictactoe")
     # 게임이 없던 채널이면 이 참가가 새 판을 여는 것이다 — 채팅만 보고 있던
     # 사람에게도 보이도록 입장 카드를 남긴다. 참가한 뒤에 판정하면 이미 waiting
     # 상태라 "새로 열린 것"인지 "이미 있던 판에 낀 것"인지 구분할 수 없다.
@@ -79,12 +75,9 @@ async def place_mark(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     store: TicTacToeStore = Depends(get_tictactoe_store),
-    registry: GameRegistry = Depends(get_game_registry),
 ) -> TicTacToeStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
     game = await store.place(channel_id, current_user.id, payload.row, payload.col)
-    if game.status != PLAYING:
-        await registry.release(channel_id, "tictactoe")
     state = _serialize(game)
     await _broadcast_state(channel_id, state)
     return state
@@ -96,11 +89,9 @@ async def reset_tictactoe(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     store: TicTacToeStore = Depends(get_tictactoe_store),
-    registry: GameRegistry = Depends(get_game_registry),
 ) -> TicTacToeStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
     game = await store.reset(channel_id)
-    await registry.release(channel_id, "tictactoe")
     state = _serialize(game)
     await _broadcast_state(channel_id, state)
     return state

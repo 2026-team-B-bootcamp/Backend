@@ -55,7 +55,7 @@ async def test_link_points_at_the_right_channel_and_feature(db):
 
 
 async def test_link_token_identifies_the_slack_user(db):
-    """링크의 토큰은 그 슬랙 계정에 매핑된 이음 계정이어야 한다."""
+    """링크의 토큰은 그 슬랙 계정에 매핑된 Deverapo 계정이어야 한다."""
     user, channel = await _context(db)
     link = build_entry_link(user, channel, by_key("watch"))
 
@@ -84,7 +84,7 @@ async def test_link_token_expires_in_15_minutes(db):
 
 
 async def test_two_slack_users_get_different_links(db):
-    """계정당 1슬롯 — 서로 다른 사람은 서로 다른 이음 계정을 가리켜야 한다."""
+    """계정당 1슬롯 — 서로 다른 사람은 서로 다른 Deverapo 계정을 가리켜야 한다."""
     a_user, channel = await _context(db, slack_user_id="U0AAA", display_name="A")
     b_user, _ = await _context(db, slack_user_id="U0BBB", display_name="B")
 
@@ -207,7 +207,7 @@ async def test_issue_entry_link_creates_everything(db_engine, slack_session):
         from app.models.server import ServerMember
         from app.models.user import User
 
-        # 슬랙 표시 이름이 이음 계정 이름으로 들어갔는지
+        # 슬랙 표시 이름이 Deverapo 계정 이름으로 들어갔는지
         user_id = int(decode_access_token(query["t"][0])["sub"])
         user = await session.get(User, user_id)
         assert user.display_name == "박민수"

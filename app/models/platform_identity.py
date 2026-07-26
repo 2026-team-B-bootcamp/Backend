@@ -1,9 +1,9 @@
-"""슬랙 ↔ 이음 매핑 테이블 3종.
+"""슬랙 ↔ Deverapo 매핑 테이블 3종.
 
-슬랙에서 온 team/channel/user를 이음의 server/channel/user에 1:1로 붙여두는 층이다.
+슬랙에서 온 team/channel/user를 Deverapo의 server/channel/user에 1:1로 붙여두는 층이다.
 매핑이 있어야 슬랙에서 시작한 게임을 웹에서 이어서 할 수 있다(app/slack/mirror.py).
 
-`platform_identities`의 UNIQUE 제약이 "슬랙 계정 하나 = 이음 계정 하나" 불변식을
+`platform_identities`의 UNIQUE 제약이 "슬랙 계정 하나 = Deverapo 계정 하나" 불변식을
 DB 레벨에서 보장한다 — 애플리케이션 로직이 아니라 여기가 최종 방어선이다.
 """
 

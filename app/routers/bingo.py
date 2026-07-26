@@ -1,8 +1,7 @@
 """빙고 미니게임 API 라우터.
 
-요청 흐름: 클라이언트 → 이 라우터 → game_registry(채널당 게임 종류 잠금)
-→ bingo store(게임 상태 저장/전이) + bingo logic(줄 완성 판정) → 결과를
-직렬화해 응답하고 realtime hub로 채널에 변경을 알린다.
+요청 흐름: 클라이언트 → 이 라우터 → bingo store(게임 상태 저장/전이) + bingo logic(줄 완성 판정)
+→ 결과를 직렬화해 응답하고 realtime hub로 채널에 변경을 알린다.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -14,7 +13,6 @@ from app.schemas.bingo import BingoStateResponse, CallEntry, ClickRequest, Playe
 from app.services import game_announce, server_service
 from app.services.bingo.logic import count_completed_lines
 from app.services.bingo.store import BingoGame, BingoGameStore, get_bingo_store
-from app.services.game_registry import GameRegistry, get_game_registry
 from app.services.realtime import hub
 
 router = APIRouter(prefix="/channels", tags=["bingo"])
@@ -59,11 +57,8 @@ async def join_bingo(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     store: BingoGameStore = Depends(get_bingo_store),
-    registry: GameRegistry = Depends(get_game_registry),
 ) -> BingoStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
-    # 채널을 빙고 게임으로 점유(다른 게임과 동시 진행 방지)한 뒤 참가 처리.
-    await registry.acquire(channel_id, "bingo")
     # 게임이 없던 채널이면 이 참가가 새 판을 여는 것이다 — 채팅만 보고 있던
     # 사람에게도 보이도록 입장 카드를 남긴다. 참가한 뒤에 판정하면 이미 waiting
     # 상태라 "새로 열린 것"인지 "이미 있던 판에 낀 것"인지 구분할 수 없다.
@@ -96,14 +91,10 @@ async def click_bingo(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     store: BingoGameStore = Depends(get_bingo_store),
-    registry: GameRegistry = Depends(get_game_registry),
 ) -> BingoStateResponse:
     await server_service.require_channel_access(db, channel_id, current_user.id)
     # 번호 하나를 호출 처리하고, store 내부에서 승리(3줄 완성) 여부까지 판정한다.
     game = await store.click(channel_id, current_user.id, payload.number)
-    if game.winner_user_id is not None:
-        # 라운드가 끝나면 채널을 다른 게임에게 내준다 — 재참여하면 새 라운드로 다시 잠긴다.
-        await registry.release(channel_id, "bingo")
     await _notify(channel_id)
     return _serialize(game, current_user.id)
 

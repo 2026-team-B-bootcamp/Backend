@@ -11,6 +11,7 @@
 host()/clear() 두 메서드만 제공하면 되고, 게임이 하나 늘면 아래 표에 한 줄만 더한다.
 """
 
+import logging
 from typing import Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -29,6 +30,7 @@ from app.services.tictactoe.store import get_tictactoe_store
 from app.services.wordchain.store import get_wordchain_store
 
 router = APIRouter(prefix="/channels", tags=["games"])
+logger = logging.getLogger(__name__)
 
 
 class GameStore(Protocol):
@@ -102,7 +104,7 @@ async def end_game(
         await get_redis().delete(f"game:announced:{channel_id}:{kind}")
     except Exception:
         # 카드 한 장 못 남기는 문제라 강제 종료 자체를 실패시킬 이유는 없다.
-        pass
+        logger.warning("게임 카드 dedupe 키 삭제 실패", exc_info=True)
 
     # 각 패널은 자기 게임의 "…state" 이벤트만 듣는데, 판이 사라진 상태에는
     # 실어 보낼 state가 없다. 그래서 종류를 담은 공통 이벤트를 하나 쏘고,

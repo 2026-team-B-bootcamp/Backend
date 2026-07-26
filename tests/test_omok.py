@@ -256,3 +256,48 @@ async def test_api_non_member_403(client: AsyncClient, register, fresh_omok_stor
     token_c = await register(client, "c@test.com", "pass1234", "Carol")
     resp = await client.post(f"/channels/{channel_id}/omok/join", headers=_headers(token_c))
     assert resp.status_code == 403
+
+
+async def test_old_format_blob_with_color_field_still_loads():
+    """엔진 통합 이전에 저장된 판(진영을 `color`로 적어둔 것)을 계속 읽을 수 있어야 한다.
+
+    omok/tictactoe store를 GridGameStore로 합치면서 플레이어 진영 필드가
+    `color` → `mark`로 바뀌었다. 프로덕션 Redis는 appendonly라 배포를 넘겨 게임
+    세션이 살아남으므로, 옮겨주지 않으면 배포 순간 진행 중이던 판이 `_load()`의
+    TypeError로 죽는다. 방장의 강제 종료마저 `_load()`를 타서 복구 경로까지 막힌다.
+
+    fakeredis는 테스트마다 비어서 시작하기 때문에 평범한 테스트로는 이 회귀가
+    구조적으로 잡히지 않는다 — 옛 포맷 블롭을 직접 심어야만 드러난다.
+    """
+    import json
+
+    from app.core.redis import get_redis
+
+    store = OmokStore()
+    old_blob = json.dumps(
+        {
+            "channel_id": 1,
+            "board": _blank(),
+            "turn": BLACK,
+            "status": "playing",
+            "host_user_id": 1,
+            # 통합 이전 포맷 — mark가 아니라 color 로 저장돼 있다
+            "players": [
+                {"user_id": 1, "display_name": "Alice", "color": BLACK},
+                {"user_id": 2, "display_name": "Bob", "color": WHITE},
+            ],
+            "winner_user_id": None,
+            "winning_line": None,
+            "last_move": None,
+            "move_count": 0,
+        }
+    )
+    await get_redis().set("game:omok:1", old_blob)
+
+    game = await store.get(1)
+
+    assert game is not None, "옛 포맷 판을 읽지 못했다"
+    assert game.player_by_color(BLACK).user_id == 1
+    assert game.player_by_color(WHITE).user_id == 2
+    # 방장이 판을 접을 수 있어야 한다 — 이 경로도 _load()를 탄다
+    assert await store.host(1) == 1
