@@ -2,7 +2,7 @@
 
 용도 3가지:
 ① WebSocket 브로드캐스트 pub/sub — services/realtime.py
-② 게임 세션 상태 저장(TTL로 자동 소멸) — services/*/store.py, game_registry.py
+② 게임 세션 상태 저장(TTL로 자동 소멸) — services/*/store.py
 ③ AI 질문 캐시 + 호출 횟수 제한 — services/ai/
 
 uvicorn 워커가 몇 개로 늘어나도 모두 같은 Redis를 바라보므로,

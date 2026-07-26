@@ -1,6 +1,6 @@
-"""슬랙 ↔ 이음 매핑(app/slack/mirror.py) 테스트.
+"""슬랙 ↔ Deverapo 매핑(app/slack/mirror.py) 테스트.
 
-핵심 불변식은 하나다: **같은 슬랙 계정은 언제나 같은 이음 user_id로 수렴한다.**
+핵심 불변식은 하나다: **같은 슬랙 계정은 언제나 같은 Deverapo user_id로 수렴한다.**
 순차 호출뿐 아니라 동시 호출에서도 지켜져야 하므로 경합 케이스를 따로 둔다.
 """
 
@@ -76,7 +76,7 @@ async def test_guest_user_has_no_credentials(db):
 
 
 async def test_renaming_in_slack_does_not_overwrite_ieum_profile(db):
-    """슬랙에서 이름을 바꿔도 웹에서 정한 이음 표시 이름은 지키다."""
+    """슬랙에서 이름을 바꿔도 웹에서 정한 Deverapo 표시 이름은 지키다."""
     identity = await mirror.ensure_identity(
         db, team_id=TEAM, slack_user_id=USER, display_name="민수"
     )
@@ -91,7 +91,7 @@ async def test_renaming_in_slack_does_not_overwrite_ieum_profile(db):
 
     assert again.display_name == "민수(퇴사예정)"  # 플랫폼 쪽 이름은 따라간다
     refreshed = await db.get(User, identity.user_id)
-    assert refreshed.display_name == "내가 정한 이름"  # 이음 프로필은 그대로
+    assert refreshed.display_name == "내가 정한 이름"  # Deverapo 프로필은 그대로
 
 
 async def test_concurrent_first_touch_converges_to_one_account(session_maker):

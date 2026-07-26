@@ -241,7 +241,7 @@ async def slack(db_engine, monkeypatch):
                 "ok": True,
                 "url": "https://test.slack.com/",
                 "team": "테스트 워크스페이스",
-                "user": "이음",
+                "user": "Deverapo",
                 "team_id": TEAM,
                 "user_id": "U0BOT",
                 "bot_id": "B0BOT",

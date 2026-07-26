@@ -105,8 +105,8 @@ async def client(db_engine) -> AsyncGenerator[AsyncClient, None]:
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
-    # 게임 점유 상태(game_registry)는 이제 Redis에 있고, fake_redis 픽스처가
-    # 테스트마다 새 인스턴스를 꽂으므로 테스트 간 격리가 저절로 된다.
+    # 게임 상태는 Redis에 있고, fake_redis 픽스처가 테스트마다 새 인스턴스를
+    # 꽂으므로 테스트 간 격리가 저절로 된다.
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac

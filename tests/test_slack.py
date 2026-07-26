@@ -241,7 +241,7 @@ def slack_app(monkeypatch):
                 "ok": True,
                 "url": "https://test.slack.com/",
                 "team": "테스트 워크스페이스",
-                "user": "이음",
+                "user": "Deverapo",
                 "team_id": "T0TEST",
                 "user_id": "U0BOT",
                 "bot_id": "B0BOT",
@@ -302,7 +302,7 @@ async def test_ping_returns_pong(slack_client):
 async def test_help_is_default(slack_client):
     res = await _post_command(slack_client, "")
     assert res.status_code == 200
-    assert "이음" in res.text
+    assert "Deverapo" in res.text
 
 
 async def test_invalid_signature_is_rejected(slack_client):

@@ -1,17 +1,14 @@
 """채널별 틱택토(3×3, 3목) 게임 상태를 Redis에 저장하고 join/place/reset을 처리한다.
 
-오목(services/omok)과 사실상 같은 구조다 — 판 크기(3)와 승리 길이(3)만 다르다.
-저장 방식: 게임 하나를 JSON으로 직렬화해 "game:tictactoe:{채널id}" 키에 TTL과 함께
-저장하고, 채널별 Redis 분산 락으로 동시 요청을 직렬화한다.
+저장·검증·승리 판정 흐름 자체는 app/services/grid_game.py의 GridGameStore가
+갖고 있다 (오목과 판 크기·승리 길이만 다를 뿐 나머지가 완전히 같다). 이 파일은
+틱택토만의 값(판 크기 3, 3목, X/O, 점유 칸 문구)을 채워 넣는 얇은 래퍼다.
+틱택토의 진영 표시자는 엔진 공통 필드 이름(mark)과 그대로 같아서, 오목과 달리
+GridGame/GridGamePlayer를 감쌀 필요 없이 바로 재사용한다.
 """
 
-import json
-from dataclasses import asdict, dataclass, field
-
-from fastapi import HTTPException, status
-
-from app.core.redis import get_redis
-from app.services.game_ttl import ttl_for
+from app.services.grid_game import GridGame, GridGamePlayer, GridGameStore
+from app.services.grid_game import find_winning_line as _grid_find_winning_line
 
 TTL_SECONDS = 3600
 BOARD_SIZE = 3
@@ -25,210 +22,28 @@ WAITING = "waiting"
 PLAYING = "playing"
 FINISHED = "finished"
 
-_DIRECTIONS = [(0, 1), (1, 0), (1, 1), (1, -1)]
-
-
-def _empty_board() -> list[list[int]]:
-    return [[EMPTY] * BOARD_SIZE for _ in range(BOARD_SIZE)]
+TicTacToePlayer = GridGamePlayer
+TicTacToeGame = GridGame
 
 
 def find_winning_line(
     board: list[list[int]], row: int, col: int, mark: int
 ) -> list[list[int]] | None:
     """방금 둔 (row, col)을 지나는 3목 줄이 있으면 그 좌표들을 돌려준다."""
-    for dr, dc in _DIRECTIONS:
-        cells = [(row, col)]
-        r, c = row + dr, col + dc
-        while 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE and board[r][c] == mark:
-            cells.append((r, c))
-            r += dr
-            c += dc
-        r, c = row - dr, col - dc
-        while 0 <= r < BOARD_SIZE and 0 <= c < BOARD_SIZE and board[r][c] == mark:
-            cells.insert(0, (r, c))
-            r -= dr
-            c -= dc
-        if len(cells) >= WIN_LENGTH:
-            return [[r, c] for r, c in cells]
-    return None
+    return _grid_find_winning_line(board, row, col, mark, BOARD_SIZE, WIN_LENGTH)
 
 
-@dataclass
-class TicTacToePlayer:
-    user_id: int
-    display_name: str
-    mark: int
-
-
-@dataclass
-class TicTacToeGame:
-    channel_id: int
-    status: str = WAITING
-    # 이 판을 연 사람(방장). 강제 종료 권한의 기준이며, 새 라운드가 열릴 때마다
-    # 그 라운드를 다시 연 사람으로 바뀐다 (game_host.py 참고).
-    host_user_id: int | None = None
-    players: list[TicTacToePlayer] = field(default_factory=list)
-    board: list[list[int]] = field(default_factory=_empty_board)
-    turn: int = X
-    winner_user_id: int | None = None
-    winning_line: list[list[int]] | None = None
-    last_move: list[int] | None = None
-    move_count: int = 0
-
-    def find_player(self, user_id: int) -> TicTacToePlayer | None:
-        return next((p for p in self.players if p.user_id == user_id), None)
-
-    def player_by_mark(self, mark: int) -> TicTacToePlayer | None:
-        return next((p for p in self.players if p.mark == mark), None)
-
-    def current_player(self) -> TicTacToePlayer | None:
-        if self.status != PLAYING:
-            return None
-        return self.player_by_mark(self.turn)
-
-    def _reset_board(self) -> None:
-        self.board = _empty_board()
-        self.turn = X
-        self.winner_user_id = None
-        self.winning_line = None
-        self.last_move = None
-        self.move_count = 0
-
-
-def _to_json(game: TicTacToeGame) -> str:
-    return json.dumps(asdict(game))
-
-
-def _from_json(raw: str) -> TicTacToeGame:
-    data = json.loads(raw)
-    data["players"] = [TicTacToePlayer(**p) for p in data["players"]]
-    # 방장 도입 이전에 저장된 판에는 이 키가 없다 — 없으면 방장 없는 판으로 둔다.
-    data.setdefault("host_user_id", None)
-    return TicTacToeGame(**data)
-
-
-class TicTacToeStore:
+class TicTacToeStore(GridGameStore):
     def __init__(self, ttl_seconds: float = TTL_SECONDS) -> None:
-        self._ttl = ttl_seconds
-
-    def _key(self, channel_id: int) -> str:
-        return f"game:tictactoe:{channel_id}"
-
-    def _lock(self, channel_id: int):
-        return get_redis().lock(f"lock:tictactoe:{channel_id}", timeout=10)
-
-    async def _load(self, channel_id: int) -> TicTacToeGame | None:
-        raw = await get_redis().get(self._key(channel_id))
-        return _from_json(raw) if raw else None
-
-    async def _save(self, game: TicTacToeGame) -> None:
-        await get_redis().set(
-            self._key(game.channel_id),
-            _to_json(game),
-            # 대기·종료 상태로 방치되면 30초 뒤 자동으로 사라진다(game_ttl 참고).
-            ex=ttl_for(game.status, self._ttl),
+        super().__init__(
+            kind="tictactoe",
+            board_size=BOARD_SIZE,
+            win_length=WIN_LENGTH,
+            first_mark=X,
+            second_mark=O,
+            occupied_message="이미 표시된 칸이에요",
+            ttl_seconds=ttl_seconds,
         )
-
-    async def join(self, channel_id: int, user_id: int, display_name: str) -> TicTacToeGame:
-        async with self._lock(channel_id):
-            game = await self._load(channel_id)
-            if game is None:
-                game = TicTacToeGame(channel_id=channel_id)
-
-            if game.status == FINISHED:
-                game._reset_board()
-                game.status = PLAYING if len(game.players) >= 2 else WAITING
-
-            # 재대국에서도 두 사람이 그대로 남으므로 방장은 처음 판을 연 사람으로 유지된다.
-            if game.host_user_id is None:
-                game.host_user_id = user_id
-
-            if game.find_player(user_id) is None:
-                if len(game.players) >= 2:
-                    raise HTTPException(
-                        status_code=status.HTTP_409_CONFLICT,
-                        detail="이미 두 명이 대국 중이에요. 관전만 할 수 있어요",
-                    )
-                # 먼저 들어온 사람이 X(선공), 두 번째가 O.
-                mark = X if not game.players else O
-                game.players.append(
-                    TicTacToePlayer(user_id=user_id, display_name=display_name, mark=mark)
-                )
-                if len(game.players) == 2:
-                    game.status = PLAYING
-                    game.turn = X
-
-            await self._save(game)
-            return game
-
-    async def place(self, channel_id: int, user_id: int, row: int, col: int) -> TicTacToeGame:
-        async with self._lock(channel_id):
-            game = await self._load(channel_id)
-            if game is None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT, detail="진행 중인 게임이 없어요"
-                )
-            if game.status != PLAYING:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT, detail="진행 중인 게임이 아니에요"
-                )
-            player = game.find_player(user_id)
-            if player is None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT, detail="이 대국의 플레이어가 아니에요"
-                )
-            if player.mark != game.turn:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT, detail="지금은 당신 차례가 아니에요"
-                )
-            if not (0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE):
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail="판 밖에는 둘 수 없어요",
-                )
-            if game.board[row][col] != EMPTY:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT, detail="이미 표시된 칸이에요"
-                )
-
-            game.board[row][col] = player.mark
-            game.last_move = [row, col]
-            game.move_count += 1
-
-            line = find_winning_line(game.board, row, col, player.mark)
-            if line is not None:
-                game.status = FINISHED
-                game.winner_user_id = player.user_id
-                game.winning_line = line
-            elif game.move_count >= BOARD_SIZE * BOARD_SIZE:
-                game.status = FINISHED
-                game.winner_user_id = None
-            else:
-                game.turn = O if game.turn == X else X
-
-            await self._save(game)
-            return game
-
-    async def reset(self, channel_id: int) -> TicTacToeGame:
-        async with self._lock(channel_id):
-            game = TicTacToeGame(channel_id=channel_id)
-            await self._save(game)
-            return game
-
-    async def get(self, channel_id: int) -> TicTacToeGame | None:
-        return await self._load(channel_id)
-
-    async def status(self, channel_id: int) -> str:
-        game = await self._load(channel_id)
-        return game.status if game else "none"
-
-    async def host(self, channel_id: int) -> int | None:
-        game = await self._load(channel_id)
-        return game.host_user_id if game else None
-
-    async def clear(self, channel_id: int) -> None:
-        """판을 통째로 지운다 — 방장의 강제 종료용(games 라우터가 호출)."""
-        await get_redis().delete(self._key(channel_id))
 
 
 store = TicTacToeStore()

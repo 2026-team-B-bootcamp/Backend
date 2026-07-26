@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db
-from app.models.server import Server, ServerMember
+from app.models.server import ServerMember
 from app.models.user import User
 from app.schemas.channel import ChannelCreateRequest, ChannelRenameRequest, ChannelResponse
 from app.schemas.server import (
@@ -249,8 +249,7 @@ async def list_members(
 ) -> list[MemberResponse]:
     # 서버 멤버가 아니면 목록을 볼 수 없다 (권한 검사).
     await server_service.require_membership(db, server_id, current_user.id)
-    server = await db.get(Server, server_id)
-    owner_id = server.created_by if server else None
+    owner_id = await server_service.get_owner_id(db, server_id)
 
     members = await db.scalars(
         select(User)
