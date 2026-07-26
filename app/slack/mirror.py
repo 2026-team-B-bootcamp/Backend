@@ -1,10 +1,10 @@
-"""슬랙 team/channel/user → 이음 server/channel/user 매핑.
+"""슬랙 team/channel/user → Deverapo server/channel/user 매핑.
 
-슬랙에서 온 요청을 기존 서비스 계층이 그대로 쓸 수 있는 이음 엔티티로 바꾼다.
+슬랙에서 온 요청을 기존 서비스 계층이 그대로 쓸 수 있는 Deverapo 엔티티로 바꾼다.
 게임·태그·채팅 로직은 이 층 아래에서 슬랙의 존재를 전혀 모른다.
 
 **모든 함수는 멱등이다.** 같은 슬랙 계정이 버튼을 몇 번 누르든 항상 같은
-이음 user_id로 수렴한다. 동시에 두 번 눌러도 마찬가지인데, 이는 애플리케이션의
+Deverapo user_id로 수렴한다. 동시에 두 번 눌러도 마찬가지인데, 이는 애플리케이션의
 "있으면 재사용, 없으면 생성" 분기가 아니라 DB UNIQUE 제약이 보장한다 —
 분기 사이에 다른 요청이 끼어드는 경합을 코드로는 막을 수 없기 때문이다.
 
@@ -48,14 +48,14 @@ async def ensure_identity(
     slack_user_id: str,
     display_name: str,
 ) -> PlatformIdentity:
-    """슬랙 계정에 대응하는 이음 계정을 찾거나 만든다.
+    """슬랙 계정에 대응하는 Deverapo 계정을 찾거나 만든다.
 
     없으면 이메일·비밀번호가 없는 게스트 User를 새로 만들어 연결한다.
     슬랙에서 가져오는 개인정보는 표시 이름 하나뿐이다(이메일·프로필 조회 안 함).
     """
     existing = await _select_identity(db, team_id=team_id, slack_user_id=slack_user_id)
     if existing is not None:
-        # 슬랙에서 이름을 바꿨으면 플랫폼 쪽 이름만 따라간다. 이음 User.display_name은
+        # 슬랙에서 이름을 바꿨으면 플랫폼 쪽 이름만 따라간다. Deverapo User.display_name은
         # 웹에서 본인이 고쳤을 수 있으므로 덮어쓰지 않는다.
         if existing.display_name != display_name:
             existing.display_name = display_name
@@ -115,7 +115,7 @@ async def ensure_workspace(
     team_name: str | None,
     creator_user_id: int,
 ) -> SlackWorkspace:
-    """슬랙 워크스페이스에 대응하는 이음 서버를 찾거나 만든다.
+    """슬랙 워크스페이스에 대응하는 Deverapo 서버를 찾거나 만든다.
 
     `creator_user_id`는 Server.created_by(NOT NULL)를 채우기 위한 값으로,
     워크스페이스를 처음 건드린 사람이 들어간다. 소유권 의미는 없다.
@@ -165,7 +165,7 @@ async def ensure_channel(
     channel_name: str,
     server_id: int,
 ) -> SlackChannel:
-    """슬랙 채널에 대응하는 이음 채널을 찾거나 만든다."""
+    """슬랙 채널에 대응하는 Deverapo 채널을 찾거나 만든다."""
     existing = await _select_channel(
         db, team_id=team_id, slack_channel_id=slack_channel_id
     )
@@ -237,7 +237,7 @@ async def ensure_context(
     slack_user_id: str,
     display_name: str,
 ) -> tuple[User, Channel]:
-    """슬랙 요청 하나를 이음의 (유저, 채널)로 통째로 번역한다.
+    """슬랙 요청 하나를 Deverapo의 (유저, 채널)로 통째로 번역한다.
 
     핸들러가 실제로 쓰는 진입점 — 위 함수들을 올바른 순서로 엮어준다.
     identity를 먼저 만드는 이유는 Server.created_by에 넣을 user_id가 필요해서다.
