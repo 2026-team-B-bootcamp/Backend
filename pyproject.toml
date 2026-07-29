@@ -25,7 +25,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "fakeredis[lua]>=2.26",
+    "fakeredis[lua]>=2.37.0",
     "httpx>=0.28.0",
     "pytest>=8.3.0",
     "pytest-asyncio>=0.25.0",
